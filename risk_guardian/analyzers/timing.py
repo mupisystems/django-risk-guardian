@@ -11,9 +11,7 @@ class TimingAnalyzer(BaseAnalyzer):
             return 0, None
 
         timestamps = sorted(e["ts"] for e in entries)
-        intervals = [
-            timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)
-        ]
+        intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
 
         mean = sum(intervals) / len(intervals)
         if mean == 0:

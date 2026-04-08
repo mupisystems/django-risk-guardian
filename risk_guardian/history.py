@@ -33,7 +33,7 @@ class AccessHistory:
         return [e for e in entries if e["ts"] >= cutoff]
 
     def _set_entries(self, key: str, entries: list[dict]) -> None:
-        entries = entries[-self._max_requests:]
+        entries = entries[-self._max_requests :]
         ttl = self._window + 60
         self._cache.set(key, json.dumps(entries), ttl)
 

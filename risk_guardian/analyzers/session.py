@@ -37,6 +37,7 @@ class SessionAnalyzer(BaseAnalyzer):
             current_sessions = cache.get(sessions_set_key) or set()
             if isinstance(current_sessions, str):
                 import json
+
                 current_sessions = set(json.loads(current_sessions))
             current_sessions.add(session_key)
             cache.set(sessions_set_key, current_sessions, 300)

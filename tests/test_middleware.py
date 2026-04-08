@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 from django.core.cache import caches
 from django.http import HttpResponse
 from django.test import RequestFactory
@@ -54,7 +52,6 @@ class TestRiskGuardianMiddleware:
         middleware = self._get_middleware(failing_view)
 
         # Patch one analyzer to raise
-        original_analyze = middleware._analyzers[0].analyze
         middleware._analyzers[0].analyze = MagicMock(side_effect=RuntimeError("boom"))
 
         request = self._make_request()

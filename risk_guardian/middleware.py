@@ -17,7 +17,7 @@ logger = logging.getLogger("risk_guardian")
 
 
 def _get_client_ip(request) -> str:
-    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "0.0.0.0")
+    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "127.0.0.1")
 
 
 def _load_analyzer(dotted_path):
@@ -48,9 +48,7 @@ class RiskGuardianMiddleware:
 
         blocked_key = f"{prefix}:blocked:{ip}"
         if cache.get(blocked_key):
-            return HttpResponse(
-                "Too Many Requests", status=config["BLOCK_RESPONSE_CODE"]
-            )
+            return HttpResponse("Too Many Requests", status=config["BLOCK_RESPONSE_CODE"])
 
         session_key = None
         session = getattr(request, "session", None)
@@ -78,19 +76,13 @@ class RiskGuardianMiddleware:
         if assessment.score >= config["SCORE_THRESHOLD_BLOCK"]:
             assessment.blocked = True
             cache.set(blocked_key, 1, config["BLOCK_TTL_SECONDS"])
-            ip_blocked.send(
-                sender=self.__class__, ip=ip, score=assessment.score, reasons=assessment.reasons
-            )
+            ip_blocked.send(sender=self.__class__, ip=ip, score=assessment.score, reasons=assessment.reasons)
             self._log_event("ip_blocked", ip, request, assessment)
-            return HttpResponse(
-                "Too Many Requests", status=config["BLOCK_RESPONSE_CODE"]
-            )
+            return HttpResponse("Too Many Requests", status=config["BLOCK_RESPONSE_CODE"])
 
         if assessment.score >= config["SCORE_THRESHOLD_CHALLENGE"]:
             assessment.challenged = True
-            challenge_required.send(
-                sender=self.__class__, ip=ip, request=request, score=assessment.score
-            )
+            challenge_required.send(sender=self.__class__, ip=ip, request=request, score=assessment.score)
 
         request.risk = assessment
 
@@ -109,9 +101,7 @@ class RiskGuardianMiddleware:
         )
 
         if assessment.score > 0:
-            risk_assessed.send(
-                sender=self.__class__, ip=ip, request=request, assessment=assessment
-            )
+            risk_assessed.send(sender=self.__class__, ip=ip, request=request, assessment=assessment)
 
         if assessment.score >= 20 or config["LOG_ALL_SCORES"]:
             self._log_event("risk_assessed", ip, request, assessment)

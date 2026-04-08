@@ -2,7 +2,7 @@
 name = "django-risk-guardian"
 version = "0.1.0"
 description = "Middleware Django para detecção de bots e scoring de risco"
-authors = ["Sua Empresa"]
+authors = ["mupisystems"]
 license = "MIT"
 readme = "README.md"
 
@@ -18,3 +18,30 @@ fakeredis = "^2"
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "S",    # flake8-bandit (security)
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "S101",  # assert allowed in tests
+    "S311",  # random not used for crypto
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106"]
+
+[tool.ruff.format]
+quote-style = "double"

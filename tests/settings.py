@@ -1,4 +1,4 @@
-SECRET_KEY = "test-secret-key-for-risk-guardian"
+SECRET_KEY = "test-secret-key-for-risk-guardian"  # noqa: S105
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",

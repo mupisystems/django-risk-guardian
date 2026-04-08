@@ -1,5 +1,10 @@
 # django-risk-guardian
 
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
+![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)
+![CI](https://github.com/mupisystems/django-risk-guardian/actions/workflows/ci.yml/badge.svg)
+
 Middleware Django reutilizável para detecção de bots e usuários maliciosos via score de risco composto.
 
 Reusable Django middleware for bot detection and malicious user scoring through composite risk assessment.
@@ -15,6 +20,11 @@ Reusable Django middleware for bot detection and malicious user scoring through 
 ### O que é
 
 Um middleware que analisa cada requisição HTTP e atribui um **score de risco (0–100)** baseado em múltiplos sinais: taxa de requisições, user-agent, sessão, padrões de navegação e timing. Sinais fracos isolados não bloqueiam, mas combinados identificam bots sem falsos positivos.
+
+> **Por que não apenas rate limiting?**
+> Sinais isolados geram falsos positivos. Um IP com rate médio + UA desatualizado +
+> sem sessão em path autenticado é mais suspeito do que qualquer um desses sozinho.
+> O score composto captura isso.
 
 ### Instalação
 
@@ -121,13 +131,29 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`.
 
 ### Analyzers
 
-| Analyzer | Detecta | Score máximo |
-|---|---|---|
-| **RateAnalyzer** | Volume anormal de requisições por IP | +50 |
-| **UserAgentAnalyzer** | UAs de bots, browsers desatualizados, UA vazio | +40 |
-| **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 |
-| **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 |
-| **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 |
+| Analyzer | Detecta | Score máximo | Reasons emitidos |
+|---|---|---|---|
+| **RateAnalyzer** | Volume anormal de requisições por IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **UserAgentAnalyzer** | UAs de bots, browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
+| **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 | `robotic_timing` |
+
+### Logs estruturados
+
+O middleware emite JSON estruturado via logger `risk_guardian`:
+
+```json
+{
+  "event": "ip_blocked",
+  "ip": "1.2.3.4",
+  "score": 85,
+  "reasons": ["high_rate", "missing_ua"],
+  "request_id": "abc-123"
+}
+```
+
+Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`.
 
 ### Testes
 
@@ -143,6 +169,11 @@ pytest tests/ -v
 ### What is it
 
 A middleware that analyzes each HTTP request and assigns a **risk score (0–100)** based on multiple signals: request rate, user-agent, session, navigation patterns, and timing. Weak signals alone don't block, but combined they identify bots without false positives.
+
+> **Why not just rate limiting?**
+> Isolated signals produce false positives. An IP with medium rate + outdated UA +
+> no session on an authenticated path is far more suspicious than any single signal alone.
+> Composite scoring captures that.
 
 ### Installation
 
@@ -249,13 +280,29 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`.
 
 ### Analyzers
 
-| Analyzer | Detects | Max score |
-|---|---|---|
-| **RateAnalyzer** | Abnormal request volume per IP | +50 |
-| **UserAgentAnalyzer** | Bot UAs, outdated browsers, missing UA | +40 |
-| **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 |
-| **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 |
-| **TimingAnalyzer** | Artificially regular intervals between requests | +30 |
+| Analyzer | Detects | Max score | Emitted reasons |
+|---|---|---|---|
+| **RateAnalyzer** | Abnormal request volume per IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **UserAgentAnalyzer** | Bot UAs, outdated browsers, missing UA | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
+| **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **TimingAnalyzer** | Artificially regular intervals between requests | +30 | `robotic_timing` |
+
+### Structured logs
+
+The middleware emits structured JSON via the `risk_guardian` logger:
+
+```json
+{
+  "event": "ip_blocked",
+  "ip": "1.2.3.4",
+  "score": 85,
+  "reasons": ["high_rate", "missing_ua"],
+  "request_id": "abc-123"
+}
+```
+
+Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`.
 
 ### Tests
 

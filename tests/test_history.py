@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch
 
 import pytest
 
@@ -72,6 +71,7 @@ class TestAccessHistory:
         history = AccessHistory("1.2.3.4", None)
         # Manually insert an old entry
         import json
+
         old_entry = {
             "ts": time.time() - 600,  # 10 min ago, outside 5-min window
             "path": "/old/",

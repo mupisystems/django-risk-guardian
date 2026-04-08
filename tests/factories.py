@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock
 
 from django.http import HttpRequest
@@ -12,7 +11,7 @@ def make_request(
     ip="1.2.3.4",
     path="/api/test/",
     method="GET",
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0 Safari/537.36",
     session_key="abc123",
 ) -> HttpRequest:
     request = HttpRequest()

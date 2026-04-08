@@ -14,5 +14,4 @@ class BaseAnalyzer(ABC):
     """
 
     @abstractmethod
-    def analyze(self, request, history: AccessHistory) -> tuple[int, str | None]:
-        ...
+    def analyze(self, request, history: AccessHistory) -> tuple[int, str | None]: ...

@@ -3,15 +3,12 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-import pytest
-
-from risk_guardian.analyzers.rate import RateAnalyzer
-from risk_guardian.analyzers.user_agent import UserAgentAnalyzer
-from risk_guardian.analyzers.session import SessionAnalyzer
 from risk_guardian.analyzers.pattern import PatternAnalyzer
+from risk_guardian.analyzers.rate import RateAnalyzer
+from risk_guardian.analyzers.session import SessionAnalyzer
 from risk_guardian.analyzers.timing import TimingAnalyzer
-from tests.factories import make_request, make_history, make_entry
-
+from risk_guardian.analyzers.user_agent import UserAgentAnalyzer
+from tests.factories import make_entry, make_history, make_request
 
 # ── RateAnalyzer ──
 
@@ -94,9 +91,7 @@ class TestUserAgentAnalyzer:
         assert reason == "bot_ua:python-requests"
 
     def test_outdated_browser(self):
-        request = make_request(
-            user_agent="Mozilla/5.0 (Windows NT 10.0) Chrome/90.0.4430.93 Safari/537.36"
-        )
+        request = make_request(user_agent="Mozilla/5.0 (Windows NT 10.0) Chrome/90.0.4430.93 Safari/537.36")
         history = make_history()
         analyzer = UserAgentAnalyzer()
         delta, reason = analyzer.analyze(request, history)
@@ -104,9 +99,7 @@ class TestUserAgentAnalyzer:
         assert reason == "outdated_browser"
 
     def test_current_browser_no_signal(self):
-        request = make_request(
-            user_agent="Mozilla/5.0 (Windows NT 10.0) Chrome/125.0.0.0 Safari/537.36"
-        )
+        request = make_request(user_agent="Mozilla/5.0 (Windows NT 10.0) Chrome/125.0.0.0 Safari/537.36")
         history = make_history()
         analyzer = UserAgentAnalyzer()
         delta, reason = analyzer.analyze(request, history)
@@ -216,7 +209,6 @@ class TestTimingAnalyzer:
         history = make_history()
         # Manually set up entries with very regular intervals
         ip_key = history._ip_key()
-        import json
         now = time.time()
         entries = [
             {"ts": now + i * 1.0, "path": "/api/", "method": "GET", "status": 200, "ua": "bot", "duration_ms": 10.0}
@@ -232,11 +224,18 @@ class TestTimingAnalyzer:
         request = make_request()
         history = make_history()
         ip_key = history._ip_key()
-        import json
         import random
+
         now = time.time()
         entries = [
-            {"ts": now + i * random.uniform(0.5, 5.0), "path": "/api/", "method": "GET", "status": 200, "ua": "normal", "duration_ms": 10.0}
+            {
+                "ts": now + i * random.uniform(0.5, 5.0),
+                "path": "/api/",
+                "method": "GET",
+                "status": 200,
+                "ua": "normal",
+                "duration_ms": 10.0,
+            }
             for i in range(10)
         ]
         # Make sure intervals are very irregular
