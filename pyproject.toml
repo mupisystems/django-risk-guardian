@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "django-risk-guardian"
+version = "0.1.0"
+description = "Middleware Django para detecção de bots e scoring de risco"
+authors = ["Sua Empresa"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+django = "^4.2"
+django-redis = "^5.4"
+
+[tool.poetry.dev-dependencies]
+pytest = "^8"
+pytest-django = "^4"
+fakeredis = "^2"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
