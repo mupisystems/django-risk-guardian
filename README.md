@@ -21,7 +21,7 @@ Um middleware que analisa cada requisição HTTP e atribui um **score de risco (
 ```toml
 # pyproject.toml
 [tool.poetry.dependencies]
-django-risk-guardian = { git = "https://github.com/suaempresa/django-risk-guardian" }
+django-risk-guardian = { git = "https://github.com/mupisystems/django-risk-guardian" }
 ```
 
 ```python
@@ -149,7 +149,7 @@ A middleware that analyzes each HTTP request and assigns a **risk score (0–100
 ```toml
 # pyproject.toml
 [tool.poetry.dependencies]
-django-risk-guardian = { git = "https://github.com/yourcompany/django-risk-guardian" }
+django-risk-guardian = { git = "https://github.com/mupisystems/django-risk-guardian" }
 ```
 
 ```python
