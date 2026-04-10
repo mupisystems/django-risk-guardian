@@ -1,20 +1,57 @@
-[tool.poetry]
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "django-risk-guardian"
 version = "0.1.0"
-description = "Middleware Django para detecção de bots e scoring de risco"
-authors = ["mupisystems"]
-license = "MIT"
+description = "Django middleware for bot detection and composite risk scoring"
 readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "mupisystems" },
+]
+keywords = ["django", "middleware", "bot-detection", "risk-scoring", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Session",
+    "Topic :: Security",
+]
+dependencies = [
+    "django>=4.2",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-django = "^4.2"
-django-redis = "^5.4"
+[project.optional-dependencies]
+redis = ["django-redis>=5.4"]
+dev = [
+    "pytest>=8",
+    "pytest-django>=4",
+    "fakeredis>=2",
+    "ruff>=0.4",
+]
 
-[tool.poetry.dev-dependencies]
-pytest = "^8"
-pytest-django = "^4"
-fakeredis = "^2"
+[project.urls]
+Homepage = "https://github.com/mupisystems/django-risk-guardian"
+Repository = "https://github.com/mupisystems/django-risk-guardian"
+Issues = "https://github.com/mupisystems/django-risk-guardian/issues"
+Changelog = "https://github.com/mupisystems/django-risk-guardian/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["risk_guardian*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
