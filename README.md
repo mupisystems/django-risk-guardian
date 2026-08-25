@@ -130,6 +130,19 @@ RISK_GUARDIAN = {
 }
 ```
 
+### Chaves no cache
+
+Todas as chaves usam o `CACHE_PREFIX` configurado (default `rg`):
+
+| Chave | TTL | Conteúdo |
+|---|---|---|
+| `{prefix}:hist:ip:{ip}` | `HISTORY_WINDOW_SECONDS` + 60 | Histórico deslizante do IP |
+| `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Histórico deslizante da sessão |
+| `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Flag de IP bloqueado (checada antes de qualquer análise) |
+| `{prefix}:sess_set:{ip}` | 300 | Conjunto de sessões distintas vistas no IP |
+
+Cada entrada de histórico guarda `ts`, `path`, `method`, `status`, `ua` (truncado em 100 chars) e `duration_ms`. A lista é limitada a `HISTORY_MAX_REQUESTS` entradas.
+
 ### Uso nas views
 
 Após o middleware processar, toda view tem acesso a `request.risk`:
@@ -271,6 +284,14 @@ Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer
 
 O evento `email_risk_assessed` loga apenas o **domínio** do e-mail, nunca o endereço completo.
 
+### Decisões de design
+
+**Nada assíncrono no caminho crítico.** O middleware roda de forma síncrona no ciclo da requisição e toda análise usa apenas o cache — nenhuma consulta ao banco, nenhuma chamada de rede externa, nenhuma task. A decisão de bloquear nunca depende de infraestrutura que possa estar lenta ou fora do ar. Persistência e notificação ficam a cargo dos signals, fora do caminho da decisão.
+
+**Falha de analyzer nunca derruba a requisição.** Se um analyzer lança exceção, o middleware loga `analyzer_error`, ignora aquele analyzer e segue com os demais. Um bug no scoring degrada a detecção, não a disponibilidade da aplicação.
+
+**Mecanismo público, configuração privada.** O algoritmo é aberto, mas os valores operacionais não. Seguindo o modelo do fail2ban e do ModSecurity: quem leu este repositório ainda não sabe quais são os seus thresholds reais, quais analyzers você deixou ativos, nem o histórico já acumulado do IP dele. O segredo operacional está na configuração do seu projeto, não no algoritmo — por isso todos os parâmetros são sobrescrevíveis via `RISK_GUARDIAN` e os defaults são apenas um ponto de partida razoável.
+
 ### Testes
 
 ```bash
@@ -395,6 +416,19 @@ RISK_GUARDIAN = {
     ],
 }
 ```
+
+### Cache keys
+
+All keys use the configured `CACHE_PREFIX` (default `rg`):
+
+| Key | TTL | Contents |
+|---|---|---|
+| `{prefix}:hist:ip:{ip}` | `HISTORY_WINDOW_SECONDS` + 60 | Sliding history for the IP |
+| `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Sliding history for the session |
+| `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Blocked-IP flag (checked before any analysis) |
+| `{prefix}:sess_set:{ip}` | 300 | Set of distinct sessions seen for the IP |
+
+Each history entry stores `ts`, `path`, `method`, `status`, `ua` (truncated to 100 chars) and `duration_ms`. The list is capped at `HISTORY_MAX_REQUESTS` entries.
 
 ### Usage in views
 
@@ -536,6 +570,14 @@ The middleware emits structured JSON via the `risk_guardian` logger:
 Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
 
 The `email_risk_assessed` event logs only the email **domain**, never the full address.
+
+### Design decisions
+
+**Nothing asynchronous on the critical path.** The middleware runs synchronously within the request cycle, and all analysis hits the cache only — no database queries, no external network calls, no tasks. The decision to block never depends on infrastructure that might be slow or down. Persistence and notification are left to signals, outside the decision path.
+
+**An analyzer failure never takes down the request.** If an analyzer raises, the middleware logs `analyzer_error`, skips that analyzer and continues with the rest. A bug in scoring degrades detection, not your application's availability.
+
+**Public mechanism, private configuration.** The algorithm is open; the operational values are not. Following the fail2ban and ModSecurity model: someone who has read this repository still doesn't know your actual thresholds, which analyzers you left enabled, or the history already accumulated for their IP. The operational secret lives in your project's configuration, not in the algorithm — which is why every parameter is overridable via `RISK_GUARDIAN` and the defaults are only a reasonable starting point.
 
 ### Tests
 
