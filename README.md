@@ -1,13 +1,18 @@
 # django-risk-guardian
 
+[![PyPI](https://img.shields.io/pypi/v/django-risk-guardian.svg)](https://pypi.org/project/django-risk-guardian/)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Django 4.2+](https://img.shields.io/badge/django-4.2%2B-green.svg)
+[![CI](https://github.com/mupisystems/django-risk-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/mupisystems/django-risk-guardian/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
-![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)
-![CI](https://github.com/mupisystems/django-risk-guardian/actions/workflows/ci.yml/badge.svg)
 
-Middleware Django reutilizável para detecção de bots e usuários maliciosos via score de risco composto.
+**Middleware de score de risco comportamental para Django.**
 
-Reusable Django middleware for bot detection and malicious user scoring through composite risk assessment.
+**Behavior-based risk scoring middleware for Django.**
+
+> Rate limiting detecta volume. Risk Guardian detecta comportamento.
+>
+> Rate limiting detects volume. Risk Guardian detects behavior.
 
 ---
 
@@ -19,12 +24,51 @@ Reusable Django middleware for bot detection and malicious user scoring through 
 
 ### O que é
 
-Um middleware que analisa cada requisição HTTP e atribui um **score de risco (0–100)** baseado em múltiplos sinais: taxa de requisições, user-agent, sessão, padrões de navegação e timing. Sinais fracos isolados não bloqueiam, mas combinados identificam bots sem falsos positivos.
+Um middleware que analisa cada requisição HTTP e atribui um **score de risco (0–100)** a partir de múltiplos sinais comportamentais: taxa de requisições, user-agent, sessão, padrões de navegação e timing. Sinais fracos isolados não bloqueiam nada — combinados, revelam comportamento automatizado ou abusivo.
 
-> **Por que não apenas rate limiting?**
-> Sinais isolados geram falsos positivos. Um IP com rate médio + UA desatualizado +
-> sem sessão em path autenticado é mais suspeito do que qualquer um desses sozinho.
-> O score composto captura isso.
+Detecção de bots é a aplicação mais óbvia do mecanismo, não o limite dele. O que o middleware entrega é um score que sua aplicação usa para decidir.
+
+### Como funciona
+
+```
+Request → Analyzers → Risk Score → Policy → Allow / Monitor / Challenge / Block
+```
+
+Cada analyzer contribui com um delta e uma razão. O score composto é comparado com os thresholds configurados e a decisão é aplicada antes da view.
+
+### Faixas de decisão
+
+| Score | Decisão | O que acontece |
+|---|---|---|
+| **0–19** | Allow | Requisição segue normalmente, sem log |
+| **20–49** | Monitor | Segue normalmente, mas emite evento `risk_assessed` para observabilidade |
+| **50–79** | Challenge | `request.risk.challenged = True` — a view decide (2FA, CAPTCHA, confirmação) |
+| **80+** | Block | HTTP 429 e IP bloqueado por `BLOCK_TTL_SECONDS` |
+
+Os limiares de Challenge e Block são configuráveis via `SCORE_THRESHOLD_CHALLENGE` e `SCORE_THRESHOLD_BLOCK`.
+
+### Why Risk Guardian?
+
+Cada camada de defesa enxerga uma dimensão diferente do tráfego:
+
+| Técnica | Detecta |
+|---|---|
+| Rate limiting | Volume |
+| CAPTCHA | Automação |
+| IP blocking | Origem |
+| WAF | Padrões conhecidos |
+| **Risk Guardian** | **Comportamento composto** |
+
+**Risk Guardian complementa essas camadas — não substitui nenhuma delas.** Continue usando WAF, rate limiting e CAPTCHA. O que falta nesse conjunto é a leitura de comportamento: um IP com taxa média + UA desatualizado + sem sessão em path autenticado passa por todos os filtros acima individualmente, mas é muito mais suspeito do que qualquer um desses sinais isolado. O score composto captura exatamente isso.
+
+### Casos de uso
+
+- Bots e scrapers que respeitam limites de taxa
+- Brute force distribuído
+- Credential stuffing
+- Scanners de vulnerabilidade (`.env`, `wp-admin`, paths de probe)
+- Comportamento anômalo de navegação (timing robótico, rotação de UA)
+- Abuso de endpoints caros ou sensíveis
 
 ### Instalação
 
@@ -125,7 +169,7 @@ def notificar_bloqueio(sender, ip, score, reasons, **kwargs):
     SlackNotifier.send(f"IP bloqueado: {ip} (score={score})")
 ```
 
-Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`.
+Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_risk_assessed`.
 
 ### Analyzers
 
@@ -136,6 +180,78 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`.
 | **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
 | **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 | `robotic_timing` |
+
+### EmailAnalyzer (login e cadastro)
+
+O `EmailAnalyzer` **não é um analyzer de middleware** — não roda por requisição e não entra na lista `ANALYZERS`. Ele avalia o **endereço de e-mail** nos signals de autenticação do Django (`user_logged_in` e `user_login_failed`) e é registrado automaticamente quando `risk_guardian` está em `INSTALLED_APPS`. Nenhuma configuração necessária.
+
+Diferente dos analyzers de middleware, que retornam um único sinal, ele pode retornar vários de uma vez — todos somados ao `request.risk`:
+
+| Reason | Delta | Detecta |
+|---|---|---|
+| `disposable_email` | +40 | Domínio descartável (mailinator, guerrillamail, yopmail, 10minutemail, ...) |
+| `suspicious_email_hex_suffix` | +30 | Sufixo hexadecimal longo no local part (ex: `user4f3a9b2c1d@...`) |
+| `suspicious_email_entropy` | +30 | Entropia de Shannon ≥ 3.5 — local part aparentemente gerado por máquina |
+| `suspicious_email_digits` | +25 | Proporção de dígitos ≥ 50% no local part |
+
+**Ordem de execução importa.** O login acontece dentro da view, ou seja, *depois* que o middleware já decidiu bloquear ou não. Os deltas de e-mail elevam `request.risk.score` durante a requisição, mas não disparam bloqueio retroativo. Cabe à view reler o score após o login:
+
+```python
+from django.contrib.auth import login
+
+def view_de_login(request):
+    login(request, user)   # dispara user_logged_in → EmailAnalyzer
+
+    if request.risk.score >= 80:
+        return redirect("verificacao_manual")
+```
+
+Para reagir ao evento, use o signal `email_risk_assessed`:
+
+```python
+from django.dispatch import receiver
+from risk_guardian.signals import email_risk_assessed
+
+@receiver(email_risk_assessed)
+def alertar_cadastro_suspeito(sender, request, user, email, score, reasons, **kwargs):
+    SlackNotifier.send(f"Login suspeito: {user.pk} (score={score}, {reasons})")
+```
+
+Os receivers automáticos usam os limiares padrão. Para ajustá-los, instancie o analyzer diretamente no seu próprio handler:
+
+```python
+from risk_guardian.analyzers import EmailAnalyzer
+
+analyzer = EmailAnalyzer(
+    digit_ratio_threshold=0.5,     # proporção de dígitos no local part
+    entropy_threshold=3.5,         # entropia de Shannon
+    min_length_for_entropy=8,      # tamanho mínimo para avaliar entropia
+    hex_suffix_threshold=10,       # tamanho do sufixo hex
+)
+
+analyzer.evaluate("user4f3a9b2c1d@mailinator.com")
+# [(40, "disposable_email"), (30, "suspicious_email_hex_suffix")]
+```
+
+### Auditoria da base existente
+
+O comando `audit_emails` aplica o `EmailAnalyzer` em todos os usuários já cadastrados — útil para encontrar contas criadas antes de o middleware entrar em produção:
+
+```bash
+python manage.py audit_emails
+python manage.py audit_emails --format json --min-score 40
+```
+
+```
+PK       Email                                         Score  Reasons
+------------------------------------------------------------------------------
+1042     user4f3a9b2c1d@mailinator.com                   100  disposable_email, suspicious_email_hex_suffix, suspicious_email_entropy
+876      x7k2m9q4w1@guerrillamail.com                     65  disposable_email, suspicious_email_digits
+
+Audited 12043 users, 2 flagged as suspicious.
+```
+
+Opções: `--format` (`table` ou `json`, padrão `table`) e `--min-score` (padrão `1`).
 
 ### Logs estruturados
 
@@ -151,13 +267,21 @@ O middleware emite JSON estruturado via logger `risk_guardian`:
 }
 ```
 
-Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`.
+Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+
+O evento `email_risk_assessed` loga apenas o **domínio** do e-mail, nunca o endereço completo.
 
 ### Testes
 
 ```bash
-pip install pytest pytest-django fakeredis
+pip install -e ".[dev]"
 pytest tests/ -v
+```
+
+Com relatório de cobertura (o CI exige no mínimo 90%):
+
+```bash
+pytest tests/ --cov --cov-report=term-missing --cov-fail-under=90
 ```
 
 ---
@@ -166,12 +290,51 @@ pytest tests/ -v
 
 ### What is it
 
-A middleware that analyzes each HTTP request and assigns a **risk score (0–100)** based on multiple signals: request rate, user-agent, session, navigation patterns, and timing. Weak signals alone don't block, but combined they identify bots without false positives.
+A middleware that analyzes each HTTP request and assigns a **risk score (0–100)** from multiple behavioral signals: request rate, user-agent, session, navigation patterns, and timing. Weak signals alone block nothing — combined, they reveal automated or abusive behavior.
 
-> **Why not just rate limiting?**
-> Isolated signals produce false positives. An IP with medium rate + outdated UA +
-> no session on an authenticated path is far more suspicious than any single signal alone.
-> Composite scoring captures that.
+Bot detection is the most obvious application of the mechanism, not its limit. What the middleware delivers is a score your application uses to decide.
+
+### How it works
+
+```
+Request → Analyzers → Risk Score → Policy → Allow / Monitor / Challenge / Block
+```
+
+Each analyzer contributes a delta and a reason. The composite score is compared against the configured thresholds and the decision is applied before the view runs.
+
+### Decision bands
+
+| Score | Decision | What happens |
+|---|---|---|
+| **0–19** | Allow | Request proceeds normally, no logging |
+| **20–49** | Monitor | Proceeds normally, but emits a `risk_assessed` event for observability |
+| **50–79** | Challenge | `request.risk.challenged = True` — the view decides (2FA, CAPTCHA, confirmation) |
+| **80+** | Block | HTTP 429 and the IP is blocked for `BLOCK_TTL_SECONDS` |
+
+Challenge and Block thresholds are configurable via `SCORE_THRESHOLD_CHALLENGE` and `SCORE_THRESHOLD_BLOCK`.
+
+### Why Risk Guardian?
+
+Each defense layer sees a different dimension of traffic:
+
+| Technique | Detects |
+|---|---|
+| Rate limiting | Volume |
+| CAPTCHA | Automation |
+| IP blocking | Origin |
+| WAF | Known patterns |
+| **Risk Guardian** | **Composite behavior** |
+
+**Risk Guardian complements these layers — it replaces none of them.** Keep your WAF, rate limiting, and CAPTCHA. What that stack is missing is a read on behavior: an IP with a medium rate + an outdated UA + no session on an authenticated path slips past each of those filters individually, yet is far more suspicious than any single one of those signals alone. Composite scoring captures exactly that.
+
+### Use cases
+
+- Bots and scrapers that stay within rate limits
+- Distributed brute force
+- Credential stuffing
+- Vulnerability scanners (`.env`, `wp-admin`, probe paths)
+- Anomalous browsing behavior (robotic timing, UA rotation)
+- Abuse of expensive or sensitive endpoints
 
 ### Installation
 
@@ -272,7 +435,7 @@ def notify_block(sender, ip, score, reasons, **kwargs):
     SlackNotifier.send(f"IP blocked: {ip} (score={score})")
 ```
 
-Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`.
+Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_risk_assessed`.
 
 ### Analyzers
 
@@ -283,6 +446,78 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`.
 | **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
 | **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Artificially regular intervals between requests | +30 | `robotic_timing` |
+
+### EmailAnalyzer (login and signup)
+
+`EmailAnalyzer` is **not a middleware analyzer** — it doesn't run per request and doesn't belong in the `ANALYZERS` list. It evaluates the **email address** on Django's authentication signals (`user_logged_in` and `user_login_failed`) and is registered automatically when `risk_guardian` is in `INSTALLED_APPS`. No configuration required.
+
+Unlike middleware analyzers, which return a single signal, it can return several at once — all added to `request.risk`:
+
+| Reason | Delta | Detects |
+|---|---|---|
+| `disposable_email` | +40 | Disposable domain (mailinator, guerrillamail, yopmail, 10minutemail, ...) |
+| `suspicious_email_hex_suffix` | +30 | Long hexadecimal suffix in the local part (e.g. `user4f3a9b2c1d@...`) |
+| `suspicious_email_entropy` | +30 | Shannon entropy ≥ 3.5 — machine-generated-looking local part |
+| `suspicious_email_digits` | +25 | Digit ratio ≥ 50% in the local part |
+
+**Execution order matters.** Login happens inside the view — that is, *after* the middleware has already decided whether to block. Email deltas raise `request.risk.score` during the request, but do not trigger a retroactive block. It's up to the view to re-read the score after login:
+
+```python
+from django.contrib.auth import login
+
+def login_view(request):
+    login(request, user)   # fires user_logged_in → EmailAnalyzer
+
+    if request.risk.score >= 80:
+        return redirect("manual_verification")
+```
+
+To react to the event, use the `email_risk_assessed` signal:
+
+```python
+from django.dispatch import receiver
+from risk_guardian.signals import email_risk_assessed
+
+@receiver(email_risk_assessed)
+def alert_suspicious_signup(sender, request, user, email, score, reasons, **kwargs):
+    SlackNotifier.send(f"Suspicious login: {user.pk} (score={score}, {reasons})")
+```
+
+The auto-registered receivers use the default thresholds. To tune them, instantiate the analyzer directly in your own handler:
+
+```python
+from risk_guardian.analyzers import EmailAnalyzer
+
+analyzer = EmailAnalyzer(
+    digit_ratio_threshold=0.5,     # digit ratio in the local part
+    entropy_threshold=3.5,         # Shannon entropy
+    min_length_for_entropy=8,      # minimum length to evaluate entropy
+    hex_suffix_threshold=10,       # hex suffix length
+)
+
+analyzer.evaluate("user4f3a9b2c1d@mailinator.com")
+# [(40, "disposable_email"), (30, "suspicious_email_hex_suffix")]
+```
+
+### Auditing an existing user base
+
+The `audit_emails` command applies `EmailAnalyzer` to all existing users — useful for finding accounts created before the middleware went to production:
+
+```bash
+python manage.py audit_emails
+python manage.py audit_emails --format json --min-score 40
+```
+
+```
+PK       Email                                         Score  Reasons
+------------------------------------------------------------------------------
+1042     user4f3a9b2c1d@mailinator.com                   100  disposable_email, suspicious_email_hex_suffix, suspicious_email_entropy
+876      x7k2m9q4w1@guerrillamail.com                     65  disposable_email, suspicious_email_digits
+
+Audited 12043 users, 2 flagged as suspicious.
+```
+
+Options: `--format` (`table` or `json`, default `table`) and `--min-score` (default `1`).
 
 ### Structured logs
 
@@ -298,13 +533,21 @@ The middleware emits structured JSON via the `risk_guardian` logger:
 }
 ```
 
-Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`.
+Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+
+The `email_risk_assessed` event logs only the email **domain**, never the full address.
 
 ### Tests
 
 ```bash
-pip install pytest pytest-django fakeredis
+pip install -e ".[dev]"
 pytest tests/ -v
+```
+
+With a coverage report (CI enforces a minimum of 90%):
+
+```bash
+pytest tests/ --cov --cov-report=term-missing --cov-fail-under=90
 ```
 
 ---
