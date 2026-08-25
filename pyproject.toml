@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-risk-guardian"
-version = "0.1.0"
-description = "Django middleware for bot detection and composite risk scoring"
+version = "0.1.1"
+description = "Behavior-based risk scoring middleware for Django"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
