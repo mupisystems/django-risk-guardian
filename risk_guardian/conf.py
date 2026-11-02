@@ -34,6 +34,13 @@ DEFAULTS = {
     "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
     "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
     "AUTH_SIGNUPS_CHALLENGE": 3,
+    # Country of the request, resolved by the web server or the CDN (GeoAnalyzer).
+    # Prefer a key set by the server, e.g. "GEOIP_COUNTRY_CODE" from nginx's
+    # geoip2 module; an "HTTP_" key (a header) is read only from TRUSTED_PROXIES.
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
         "risk_guardian.analyzers.UserAgentAnalyzer",
@@ -41,6 +48,7 @@ DEFAULTS = {
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
         "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 

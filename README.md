@@ -154,6 +154,12 @@ RISK_GUARDIAN = {
     "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
     "AUTH_SIGNUPS_CHALLENGE": 3,
 
+    # País da requisição (GeoAnalyzer)
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
+
     # Analyzers ativos (ordem importa)
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
@@ -162,6 +168,7 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
         "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 ```
@@ -231,6 +238,7 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`, `emai
 | **PatternAnalyzer** | Paths de scan (.env, wp-admin, painéis admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 | `robotic_timing` |
 | **AuthAnalyzer** | Muitas contas logando ou falhando no mesmo IP, cadastros em série | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+| **GeoAnalyzer** | País fora da lista permitida, rede Tor (país resolvido pelo servidor web ou pela CDN) | +40 | `unexpected_country:NL`, `tor_exit` |
 
 ### AuthAnalyzer (credential stuffing e cadastro automatizado)
 
@@ -259,6 +267,41 @@ record_auth_event(request, SIGNUP, user.email)
 ```
 
 O teste `tests/test_attack_replay.py` reproduz um credential stuffing típico — lista de senhas roubadas, uma ou duas tentativas por conta, cerca de metade das senhas já trocadas e user agent `Mozilla/5.0` puro: o IP toma uma conta e é bloqueado no 15º segundo.
+
+### GeoAnalyzer (país da requisição)
+
+O `GeoAnalyzer` não consulta base nenhuma: lê o código do país que o servidor web ou a CDN já resolveu, na chave `GEO_COUNTRY_META_KEY` do `request.META`. Sem essa chave configurada, não faz nada.
+
+| Situação | Delta | Reason |
+|---|---|---|
+| País `T1` (rede Tor, código do Cloudflare) | +40 (`GEO_TOR_SCORE`) | `tor_exit` |
+| País fora de `GEO_ALLOWED_COUNTRIES` | +25 (`GEO_UNEXPECTED_COUNTRY_SCORE`) | `unexpected_country:XX` |
+| País desconhecido (`XX`, vazio) ou lista vazia | 0 | — |
+
+Sozinho, um país inesperado fica em **Monitor**; somado a outro sinal (UA mínimo, muitas contas no IP), passa a **Challenge** ou **Block**.
+
+**Com nginx (recomendado).** O módulo [geoip2](https://github.com/leev/ngx_http_geoip2_module) (`libnginx-mod-http-geoip2` no Debian/Ubuntu) consulta uma base `.mmdb` local (DB-IP Lite, IPinfo Lite ou MaxMind GeoLite2) e entrega o país à aplicação numa variável **sem o prefixo `HTTP_`** — que o cliente não tem como forjar, já que todo cabeçalho chega com esse prefixo:
+
+```nginx
+# http { }
+geoip2 /var/lib/geoip/dbip-country-lite.mmdb {
+    $geoip2_country country iso_code;
+}
+
+# location que repassa ao uWSGI (ou fastcgi_param / proxy_set_header no gunicorn)
+uwsgi_param GEOIP_COUNTRY_CODE $geoip2_country;
+```
+
+```python
+RISK_GUARDIAN = {
+    "GEO_COUNTRY_META_KEY": "GEOIP_COUNTRY_CODE",
+    "GEO_ALLOWED_COUNTRIES": ["BR"],
+}
+```
+
+Com gunicorn atrás de `proxy_pass` não existe variável fora do `HTTP_`: o nginx precisa sobrescrever o cabeçalho (`proxy_set_header X-Geo-Country $geoip2_country;`) e a chave vira `HTTP_X_GEO_COUNTRY`, lida só de `TRUSTED_PROXIES`.
+
+**Com Cloudflare.** A chave `HTTP_CF_IPCOUNTRY` é um cabeçalho, então só é lida quando o `REMOTE_ADDR` está em `TRUSTED_PROXIES` (as faixas do Cloudflare). Se o nginx reescreve o `REMOTE_ADDR` com `real_ip`, a origem do Cloudflare já não aparece para o Django: nesse caso passe o país pelo nginx, como acima, usando `$http_cf_ipcountry`.
 
 ### EmailAnalyzer (login e cadastro)
 
@@ -507,6 +550,12 @@ RISK_GUARDIAN = {
     "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
     "AUTH_SIGNUPS_CHALLENGE": 3,
 
+    # Country of the request (GeoAnalyzer)
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
+
     # Active analyzers (order matters)
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
@@ -515,6 +564,7 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
         "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 ```
@@ -584,6 +634,7 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_r
 | **PatternAnalyzer** | Scan paths (.env, wp-admin, admin panels), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Artificially regular intervals between requests | +30 | `robotic_timing` |
 | **AuthAnalyzer** | Many accounts logging in or failing from one IP, serial signups | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+| **GeoAnalyzer** | Country outside the allowed list, Tor network (country resolved by the web server or the CDN) | +40 | `unexpected_country:NL`, `tor_exit` |
 
 ### AuthAnalyzer (credential stuffing and automated signup)
 
@@ -612,6 +663,41 @@ record_auth_event(request, SIGNUP, user.email)
 ```
 
 `tests/test_attack_replay.py` replays a typical credential stuffing run — a stolen-password list, one or two attempts per account, about half of the passwords already changed and a bare `Mozilla/5.0` user agent: the IP takes one account and is blocked at the 15th second.
+
+### GeoAnalyzer (country of the request)
+
+`GeoAnalyzer` does no lookup: it reads the country code the web server or the CDN already resolved, from `request.META[GEO_COUNTRY_META_KEY]`. Without that key it does nothing.
+
+| Situation | Delta | Reason |
+|---|---|---|
+| Country `T1` (Tor network, Cloudflare's code) | +40 (`GEO_TOR_SCORE`) | `tor_exit` |
+| Country outside `GEO_ALLOWED_COUNTRIES` | +25 (`GEO_UNEXPECTED_COUNTRY_SCORE`) | `unexpected_country:XX` |
+| Unknown country (`XX`, empty) or empty list | 0 | — |
+
+On its own, an unexpected country stays at **Monitor**; added to another signal (minimal UA, many accounts on the IP) it reaches **Challenge** or **Block**.
+
+**With nginx (recommended).** The [geoip2](https://github.com/leev/ngx_http_geoip2_module) module (`libnginx-mod-http-geoip2` on Debian/Ubuntu) looks up a local `.mmdb` database (DB-IP Lite, IPinfo Lite or MaxMind GeoLite2) and hands the country to the application in a variable **without the `HTTP_` prefix** — which the client cannot forge, since every header arrives with that prefix:
+
+```nginx
+# http { }
+geoip2 /var/lib/geoip/dbip-country-lite.mmdb {
+    $geoip2_country country iso_code;
+}
+
+# location that passes to uWSGI (or fastcgi_param / proxy_set_header for gunicorn)
+uwsgi_param GEOIP_COUNTRY_CODE $geoip2_country;
+```
+
+```python
+RISK_GUARDIAN = {
+    "GEO_COUNTRY_META_KEY": "GEOIP_COUNTRY_CODE",
+    "GEO_ALLOWED_COUNTRIES": ["BR"],
+}
+```
+
+With gunicorn behind `proxy_pass` there is no variable outside `HTTP_`: nginx must overwrite the header (`proxy_set_header X-Geo-Country $geoip2_country;`) and the key becomes `HTTP_X_GEO_COUNTRY`, read only from `TRUSTED_PROXIES`.
+
+**With Cloudflare.** `HTTP_CF_IPCOUNTRY` is a header, so it is read only when `REMOTE_ADDR` is in `TRUSTED_PROXIES` (Cloudflare's ranges). If nginx rewrites `REMOTE_ADDR` with `real_ip`, the Cloudflare origin is no longer visible to Django: pass the country through nginx instead, as above, using `$http_cf_ipcountry`.
 
 ### EmailAnalyzer (login and signup)
 

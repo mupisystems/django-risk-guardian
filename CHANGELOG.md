@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GeoAnalyzer`: scores the country the web server or the CDN resolved, read
+  from `GEO_COUNTRY_META_KEY` — `unexpected_country:XX` outside
+  `GEO_ALLOWED_COUNTRIES` and `tor_exit` for Cloudflare's `T1`. Does nothing
+  until configured. A header key (`HTTP_*`) is read only from
+  `TRUSTED_PROXIES`; the README shows nginx's geoip2 module passing the country
+  in a variable the client cannot forge.
 - `AuthAnalyzer`: scores an IP by the distinct accounts that logged in, failed
   to log in or signed up from it within `AUTH_WINDOW_SECONDS` — the signal of
   credential stuffing and automated signup. Enabled by default; thresholds in
@@ -85,8 +91,10 @@ Planned, not yet implemented:
 
 | Version | Feature |
 |---|---|
-| v0.2 | `GeoAnalyzer` — score by country via the Cloudflare `cf_country` header |
-| v0.2 | `TorExitAnalyzer` — check against the Tor exit node list |
+| v0.3 | Per-account login context — new device or network for that user |
+| v0.3 | Hosting and VPN ASNs as a signal |
+| v0.3 | In-process `.mmdb` lookup for projects without geoip2 in the web server |
+| v0.3 | Tor exit list for projects without Cloudflare (which already reports `T1`) |
 | v0.3 | AbuseIPDB API integration |
 | v0.3 | Optional persistence of block history to the database for auditing |
 | v0.4 | Prometheus metrics |
