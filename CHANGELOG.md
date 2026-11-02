@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- The client IP no longer comes from `X-Real-IP` unconditionally. A client
+  could set that header to dodge a block or to get another IP blocked. The IP
+  is now `REMOTE_ADDR`; a header is read only when `CLIENT_IP_HEADER` is set
+  and the request comes from one of `TRUSTED_PROXIES`. **Projects that relied
+  on `X-Real-IP` must set both** (or fix `REMOTE_ADDR` in the proxy).
+
+### Fixed
+
+- README: the middleware goes after `SessionMiddleware`; placed first, it never
+  sees the session.
+
 ## [0.1.1] - 2026-08-25
 
 Documentation and testing release. No runtime changes — the `risk_guardian`

@@ -11,13 +11,10 @@ from django.http import HttpResponse
 from risk_guardian.assessment import RiskAssessment
 from risk_guardian.conf import get_config
 from risk_guardian.history import AccessHistory
+from risk_guardian.network import get_client_ip
 from risk_guardian.signals import challenge_required, ip_blocked, risk_assessed
 
 logger = logging.getLogger("risk_guardian")
-
-
-def _get_client_ip(request) -> str:
-    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "127.0.0.1")
 
 
 def _load_analyzer(dotted_path):
@@ -42,7 +39,7 @@ class RiskGuardianMiddleware:
         if any(path.startswith(ignored) for ignored in config["IGNORE_PATHS"]):
             return self.get_response(request)
 
-        ip = _get_client_ip(request)
+        ip = get_client_ip(request, config)
         cache = caches[config["CACHE_BACKEND"]]
         prefix = config["CACHE_PREFIX"]
 

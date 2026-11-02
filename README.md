@@ -77,14 +77,31 @@ pip install django-risk-guardian
 ```
 
 ```python
-# settings.py (3 linhas)
+# settings.py
 INSTALLED_APPS += ["risk_guardian"]
 
 MIDDLEWARE = [
-    "risk_guardian.middleware.RiskGuardianMiddleware",
+    # ...
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "risk_guardian.middleware.RiskGuardianMiddleware",  # depois do SessionMiddleware
     # ... demais middlewares
 ]
 ```
+
+O middleware precisa vir **depois** do `SessionMiddleware`: antes dele, `request.session` não existe e o `SessionAnalyzer` não enxerga nenhuma sessão.
+
+### IP do cliente
+
+Por padrão o IP é o `REMOTE_ADDR`, o único valor que o cliente não escolhe. Atrás de um proxy reverso, prefira corrigir o `REMOTE_ADDR` no próprio proxy (por exemplo, `real_ip` no nginx). Se precisar ler um cabeçalho, informe qual e quem pode enviá-lo:
+
+```python
+RISK_GUARDIAN = {
+    "CLIENT_IP_HEADER": "HTTP_X_FORWARDED_FOR",   # chave do request.META
+    "TRUSTED_PROXIES": ["10.0.0.0/8"],            # quem pode definir o cabeçalho
+}
+```
+
+O cabeçalho só é lido quando a requisição vem de um `TRUSTED_PROXIES`, e o cliente é o endereço mais à direita que não é proxy confiável. Confiar num cabeçalho sem essa checagem deixa o atacante escolher o próprio IP: ele escapa do bloqueio e pode fazer o middleware bloquear o IP de outra pessoa.
 
 ### Requisitos
 
@@ -118,6 +135,10 @@ RISK_GUARDIAN = {
 
     # Paths ignorados
     "IGNORE_PATHS": ["/health/", "/metrics/", "/__debug__/", "/favicon.ico"],
+
+    # IP do cliente (ver "IP do cliente")
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
 
     # Analyzers ativos (ordem importa)
     "ANALYZERS": [
@@ -364,14 +385,31 @@ pip install django-risk-guardian
 ```
 
 ```python
-# settings.py (3 lines)
+# settings.py
 INSTALLED_APPS += ["risk_guardian"]
 
 MIDDLEWARE = [
-    "risk_guardian.middleware.RiskGuardianMiddleware",
+    # ...
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "risk_guardian.middleware.RiskGuardianMiddleware",  # after SessionMiddleware
     # ... other middlewares
 ]
 ```
+
+The middleware must come **after** `SessionMiddleware`: before it, `request.session` does not exist and `SessionAnalyzer` sees no session at all.
+
+### Client IP
+
+By default the IP is `REMOTE_ADDR`, the only value the client cannot choose. Behind a reverse proxy, prefer fixing `REMOTE_ADDR` in the proxy itself (e.g. nginx `real_ip`). If you need to read a header, say which one and who may send it:
+
+```python
+RISK_GUARDIAN = {
+    "CLIENT_IP_HEADER": "HTTP_X_FORWARDED_FOR",   # request.META key
+    "TRUSTED_PROXIES": ["10.0.0.0/8"],            # who may set the header
+}
+```
+
+The header is read only when the request comes from one of `TRUSTED_PROXIES`, and the client is the rightmost address that is not a trusted proxy. Trusting a header without that check lets an attacker pick their own IP: they dodge the block and can get the middleware to block someone else's IP.
 
 ### Requirements
 
@@ -405,6 +443,10 @@ RISK_GUARDIAN = {
 
     # Ignored paths
     "IGNORE_PATHS": ["/health/", "/metrics/", "/__debug__/", "/favicon.ico"],
+
+    # Client IP (see "Client IP")
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
 
     # Active analyzers (order matters)
     "ANALYZERS": [

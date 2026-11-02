@@ -17,6 +17,12 @@ DEFAULTS = {
         "/__debug__/",
         "/favicon.ico",
     ],
+    # Client IP resolution. By default only REMOTE_ADDR is used: a header set
+    # by the client can be forged. Set CLIENT_IP_HEADER (a META key, e.g.
+    # "HTTP_X_FORWARDED_FOR") and list the proxies that set it in
+    # TRUSTED_PROXIES; the header is read only when the request comes from one.
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
         "risk_guardian.analyzers.UserAgentAnalyzer",
