@@ -11,7 +11,7 @@ from django.http import HttpResponse
 from risk_guardian.assessment import RiskAssessment
 from risk_guardian.conf import get_config
 from risk_guardian.history import AccessHistory
-from risk_guardian.network import get_client_ip
+from risk_guardian.network import get_client_ip, ip_in
 from risk_guardian.signals import challenge_required, ip_blocked, risk_assessed
 
 logger = logging.getLogger("risk_guardian")
@@ -40,6 +40,9 @@ class RiskGuardianMiddleware:
             return self.get_response(request)
 
         ip = get_client_ip(request, config)
+        if ip_in(ip, config["ALLOWLIST_IPS"]):
+            return self.get_response(request)
+
         cache = caches[config["CACHE_BACKEND"]]
         prefix = config["CACHE_PREFIX"]
 

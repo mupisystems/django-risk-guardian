@@ -23,12 +23,24 @@ DEFAULTS = {
     # TRUSTED_PROXIES; the header is read only when the request comes from one.
     "CLIENT_IP_HEADER": None,
     "TRUSTED_PROXIES": [],
+    # IPs and networks (CIDR) that are never scored nor blocked.
+    "ALLOWLIST_IPS": [],
+    # Scan paths added to the built-in list of PatternAnalyzer.
+    "EXTRA_SCAN_PATHS": [],
+    # Authentication tracking (logins and signups per IP), read by AuthAnalyzer.
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
         "risk_guardian.analyzers.UserAgentAnalyzer",
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
     ],
 }
 

@@ -31,6 +31,12 @@ class UserAgentAnalyzer(BaseAnalyzer):
             if pattern in ua_lower:
                 return 40, f"bot_ua:{pattern}"
 
+        # Every real browser sends the platform in parentheses, e.g.
+        # "Mozilla/5.0 (Windows NT 10.0; ...)". A bare "Mozilla/5.0" is a
+        # script that set the minimum needed to pass naive UA checks.
+        if ua_lower.startswith("mozilla/") and "(" not in ua:
+            return 30, "minimal_ua"
+
         match = re.search(r"Chrome/(\d+)", ua)
         if match:
             version = int(match.group(1))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from risk_guardian.analyzers.base import BaseAnalyzer
+from risk_guardian.conf import get_config
 from risk_guardian.history import AccessHistory
 
 SCAN_PATHS = [
@@ -10,14 +11,26 @@ SCAN_PATHS = [
     "/.git",
     "/.aws",
     "/config.php",
+    "/.svn",
+    "/django-admin",
+    "/backoffice",
+    "/adminer",
+    "/administrator",
+    "/_ignition",
+    "/actuator",
+    "/xmlrpc.php",
+    "/vendor/phpunit",
 ]
 
 
 class PatternAnalyzer(BaseAnalyzer):
+    def __init__(self):
+        self.scan_paths = [*SCAN_PATHS, *get_config()["EXTRA_SCAN_PATHS"]]
+
     def analyze(self, request, history: AccessHistory) -> tuple[int, str | None]:
         path = request.path
 
-        for scan_path in SCAN_PATHS:
+        for scan_path in self.scan_paths:
             if path.startswith(scan_path):
                 return 60, f"scan_attempt:{scan_path}"
 

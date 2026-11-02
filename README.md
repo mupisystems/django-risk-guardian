@@ -103,6 +103,8 @@ RISK_GUARDIAN = {
 
 O cabeçalho só é lido quando a requisição vem de um `TRUSTED_PROXIES`, e o cliente é o endereço mais à direita que não é proxy confiável. Confiar num cabeçalho sem essa checagem deixa o atacante escolher o próprio IP: ele escapa do bloqueio e pode fazer o middleware bloquear o IP de outra pessoa.
 
+IPs e redes em `ALLOWLIST_IPS` (aceita CIDR) nunca são pontuados nem bloqueados — útil para escritórios e balcões onde muita gente entra pelo mesmo IP.
+
 ### Requisitos
 
 - Python 3.11+
@@ -139,6 +141,18 @@ RISK_GUARDIAN = {
     # IP do cliente (ver "IP do cliente")
     "CLIENT_IP_HEADER": None,
     "TRUSTED_PROXIES": [],
+    "ALLOWLIST_IPS": [],
+
+    # Paths de varredura somados à lista do PatternAnalyzer
+    "EXTRA_SCAN_PATHS": [],
+
+    # Logins e cadastros por IP (AuthAnalyzer)
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
 
     # Analyzers ativos (ordem importa)
     "ANALYZERS": [
@@ -147,6 +161,7 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
     ],
 }
 ```
@@ -161,6 +176,7 @@ Todas as chaves usam o `CACHE_PREFIX` configurado (default `rg`):
 | `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Histórico deslizante da sessão |
 | `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Flag de IP bloqueado (checada antes de qualquer análise) |
 | `{prefix}:sess_set:{ip}` | 300 | Conjunto de sessões distintas vistas no IP |
+| `{prefix}:auth:{ok\|fail\|signup}:{ip}` | `AUTH_WINDOW_SECONDS` + 60 | Contas que logaram, falharam ou se cadastraram no IP (hash, nunca o e-mail) |
 
 Cada entrada de histórico guarda `ts`, `path`, `method`, `status`, `ua` (truncado em 100 chars) e `duration_ms`. A lista é limitada a `HISTORY_MAX_REQUESTS` entradas.
 
@@ -210,10 +226,39 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`, `emai
 | Analyzer | Detecta | Score máximo | Reasons emitidos |
 |---|---|---|---|
 | **RateAnalyzer** | Volume anormal de requisições por IP (a partir de 5 amostras) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
-| **UserAgentAnalyzer** | UAs de bots, browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **UserAgentAnalyzer** | UAs de bots, UA mínimo (`Mozilla/5.0` sem plataforma), browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `minimal_ua`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
-| **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **PatternAnalyzer** | Paths de scan (.env, wp-admin, painéis admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 | `robotic_timing` |
+| **AuthAnalyzer** | Muitas contas logando ou falhando no mesmo IP, cadastros em série | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+
+### AuthAnalyzer (credential stuffing e cadastro automatizado)
+
+Quem testa uma lista de e-mails e senhas roubados tenta uma ou duas vezes por conta, então o bloqueio por conta nunca dispara. O sinal é a quantidade de **contas distintas** que um mesmo IP toca numa janela (`AUTH_WINDOW_SECONDS`, padrão 1 h).
+
+Os receivers do pacote registram cada login (`user_logged_in`), falha (`user_login_failed`) e, com django-allauth instalado, cadastro (`user_signed_up`). As contas são guardadas como hash com a `SECRET_KEY` — o cache não guarda e-mail nem usuário.
+
+| Situação no IP, dentro da janela | Delta | Reason |
+|---|---|---|
+| 5+ contas com falha (`AUTH_FAILED_ACCOUNTS_BLOCK`) | +80 | `credential_stuffing` |
+| 3+ contas com falha (`AUTH_FAILED_ACCOUNTS_CHALLENGE`) | +50 | `failed_logins_many_accounts` |
+| 5+ contas distintas (`AUTH_ACCOUNTS_CHALLENGE`) | +50 | `logins_many_accounts` |
+| 3+ contas distintas (`AUTH_ACCOUNTS_MONITOR`) | +20 | `logins_several_accounts` |
+| 3+ cadastros (`AUTH_SIGNUPS_CHALLENGE`) | +50 | `signup_velocity` |
+
+Falhas pesam mais que acertos: num escritório, dez pessoas entrando pelo mesmo IP raramente erram a senha de cinco contas diferentes; uma lista de senhas roubadas erra em cerca de metade. Por isso, sozinho, o escritório chega no máximo a **Challenge** e nunca a **Block**.
+
+O login acontece dentro da view, depois da decisão do middleware. Os receivers somam o sinal ao `request.risk` da própria requisição (a view pode reagir na hora) e o `AuthAnalyzer` aplica o acumulado em todas as requisições seguintes do IP — é ali que o desafio ou o bloqueio acontece.
+
+Fluxos próprios de login ou cadastro podem registrar eventos diretamente:
+
+```python
+from risk_guardian.auth_tracking import SIGNUP, record_auth_event
+
+record_auth_event(request, SIGNUP, user.email)
+```
+
+O teste `tests/test_attack_replay.py` reproduz um credential stuffing típico — lista de senhas roubadas, uma ou duas tentativas por conta, cerca de metade das senhas já trocadas e user agent `Mozilla/5.0` puro: o IP toma uma conta e é bloqueado no 15º segundo.
 
 ### EmailAnalyzer (login e cadastro)
 
@@ -411,6 +456,8 @@ RISK_GUARDIAN = {
 
 The header is read only when the request comes from one of `TRUSTED_PROXIES`, and the client is the rightmost address that is not a trusted proxy. Trusting a header without that check lets an attacker pick their own IP: they dodge the block and can get the middleware to block someone else's IP.
 
+IPs and networks in `ALLOWLIST_IPS` (CIDR accepted) are never scored nor blocked — useful for offices and front desks where many people share one IP.
+
 ### Requirements
 
 - Python 3.11+
@@ -447,6 +494,18 @@ RISK_GUARDIAN = {
     # Client IP (see "Client IP")
     "CLIENT_IP_HEADER": None,
     "TRUSTED_PROXIES": [],
+    "ALLOWLIST_IPS": [],
+
+    # Scan paths added to PatternAnalyzer's list
+    "EXTRA_SCAN_PATHS": [],
+
+    # Logins and signups per IP (AuthAnalyzer)
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
 
     # Active analyzers (order matters)
     "ANALYZERS": [
@@ -455,6 +514,7 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
     ],
 }
 ```
@@ -469,6 +529,7 @@ All keys use the configured `CACHE_PREFIX` (default `rg`):
 | `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Sliding history for the session |
 | `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Blocked-IP flag (checked before any analysis) |
 | `{prefix}:sess_set:{ip}` | 300 | Set of distinct sessions seen for the IP |
+| `{prefix}:auth:{ok\|fail\|signup}:{ip}` | `AUTH_WINDOW_SECONDS` + 60 | Accounts that logged in, failed or signed up from the IP (hashed, never the e-mail) |
 
 Each history entry stores `ts`, `path`, `method`, `status`, `ua` (truncated to 100 chars) and `duration_ms`. The list is capped at `HISTORY_MAX_REQUESTS` entries.
 
@@ -518,10 +579,39 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_r
 | Analyzer | Detects | Max score | Emitted reasons |
 |---|---|---|---|
 | **RateAnalyzer** | Abnormal request volume per IP (from 5 samples on) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
-| **UserAgentAnalyzer** | Bot UAs, outdated browsers, missing UA | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **UserAgentAnalyzer** | Bot UAs, minimal UA (`Mozilla/5.0` with no platform), outdated browsers, missing UA | +40 | `bot_ua:curl`, `minimal_ua`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
-| **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **PatternAnalyzer** | Scan paths (.env, wp-admin, admin panels), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Artificially regular intervals between requests | +30 | `robotic_timing` |
+| **AuthAnalyzer** | Many accounts logging in or failing from one IP, serial signups | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+
+### AuthAnalyzer (credential stuffing and automated signup)
+
+Whoever tests a list of stolen e-mails and passwords tries once or twice per account, so per-account lockouts never fire. The signal is the number of **distinct accounts** one IP touches inside a window (`AUTH_WINDOW_SECONDS`, 1 h by default).
+
+The bundled receivers record every login (`user_logged_in`), failure (`user_login_failed`) and, with django-allauth installed, signup (`user_signed_up`). Accounts are stored as a hash keyed with `SECRET_KEY` — the cache holds no e-mail or username.
+
+| Situation for the IP, inside the window | Delta | Reason |
+|---|---|---|
+| 5+ accounts with failures (`AUTH_FAILED_ACCOUNTS_BLOCK`) | +80 | `credential_stuffing` |
+| 3+ accounts with failures (`AUTH_FAILED_ACCOUNTS_CHALLENGE`) | +50 | `failed_logins_many_accounts` |
+| 5+ distinct accounts (`AUTH_ACCOUNTS_CHALLENGE`) | +50 | `logins_many_accounts` |
+| 3+ distinct accounts (`AUTH_ACCOUNTS_MONITOR`) | +20 | `logins_several_accounts` |
+| 3+ signups (`AUTH_SIGNUPS_CHALLENGE`) | +50 | `signup_velocity` |
+
+Failures weigh more than successes: in an office, ten people logging in from one IP rarely mistype the password of five different accounts; a stolen-password list fails on about half of them. On its own, the office reaches **Challenge** at most, never **Block**.
+
+The login runs inside the view, after the middleware has decided. The receivers add the signal to that request's `request.risk` (the view can react right away) and `AuthAnalyzer` applies the accumulated signal to every following request from the IP — that is where the challenge or the block lands.
+
+Custom login or signup flows can record events directly:
+
+```python
+from risk_guardian.auth_tracking import SIGNUP, record_auth_event
+
+record_auth_event(request, SIGNUP, user.email)
+```
+
+`tests/test_attack_replay.py` replays a typical credential stuffing run — a stolen-password list, one or two attempts per account, about half of the passwords already changed and a bare `Mozilla/5.0` user agent: the IP takes one account and is blocked at the 15th second.
 
 ### EmailAnalyzer (login and signup)
 

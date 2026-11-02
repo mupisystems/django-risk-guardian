@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the request comes from one of `TRUSTED_PROXIES`. **Projects that relied
   on `X-Real-IP` must set both** (or fix `REMOTE_ADDR` in the proxy).
 
+### Added
+
+- `AuthAnalyzer`: scores an IP by the distinct accounts that logged in, failed
+  to log in or signed up from it within `AUTH_WINDOW_SECONDS` — the signal of
+  credential stuffing and automated signup. Enabled by default; thresholds in
+  `AUTH_*` settings. Accounts are stored as a keyed hash, never in clear.
+- Receivers that record logins, failed logins and, with django-allauth,
+  signups; `record_auth_event()` for custom login and signup flows.
+- `ALLOWLIST_IPS` (IPs and CIDR networks never scored nor blocked).
+- `EXTRA_SCAN_PATHS` and more built-in scan paths (`/django-admin`,
+  `/backoffice`, `/adminer`, `/administrator`, `/_ignition`, `/actuator`,
+  `/xmlrpc.php`, `/.svn`, `/vendor/phpunit`).
+- `minimal_ua` reason for a bare `Mozilla/5.0` user agent.
+- Replay test of a typical credential stuffing run.
+
 ### Fixed
 
 - `RateAnalyzer` no longer extrapolates a rate from fewer than 5 requests

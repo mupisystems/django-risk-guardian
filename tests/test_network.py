@@ -91,3 +91,12 @@ class TestMiddlewareIp:
         cache = caches[config["CACHE_BACKEND"]]
         assert cache.get(f"{config['CACHE_PREFIX']}:blocked:198.51.100.7")
         assert not cache.get(f"{config['CACHE_PREFIX']}:blocked:203.0.113.50")
+
+    def test_allowlisted_ip_is_neither_scored_nor_blocked(self, settings):
+        settings.RISK_GUARDIAN = {"ALLOWLIST_IPS": ["198.51.100.0/24"]}
+        config = get_config()
+        caches[config["CACHE_BACKEND"]].set(f"{config['CACHE_PREFIX']}:blocked:198.51.100.7", 1, 60)
+        request = _request(remote="198.51.100.7", HTTP_USER_AGENT="curl/8.5.0")
+        response = RiskGuardianMiddleware(_ok_view)(request)
+        assert response.status_code == 200
+        assert not hasattr(request, "risk")

@@ -117,6 +117,18 @@ class TestUserAgentAnalyzer:
         assert delta == 0
         assert reason is None
 
+    def test_minimal_ua(self):
+        request = make_request(user_agent="Mozilla/5.0")
+        delta, reason = UserAgentAnalyzer().analyze(request, make_history())
+        assert delta == 30
+        assert reason == "minimal_ua"
+
+    def test_safari_without_chrome_token_no_signal(self):
+        ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Safari/604.1"
+        delta, reason = UserAgentAnalyzer().analyze(make_request(user_agent=ua), make_history())
+        assert delta == 0
+        assert reason is None
+
 
 # ── SessionAnalyzer ──
 
@@ -178,6 +190,17 @@ class TestPatternAnalyzer:
         delta, reason = analyzer.analyze(request, history)
         assert delta == 60
         assert reason == "scan_attempt:/wp-admin"
+
+    def test_scan_attempt_admin_panel_probe(self):
+        delta, reason = PatternAnalyzer().analyze(make_request(path="/django-admin/"), make_history())
+        assert delta == 60
+        assert reason == "scan_attempt:/django-admin"
+
+    def test_extra_scan_paths_from_settings(self, settings):
+        settings.RISK_GUARDIAN = {"EXTRA_SCAN_PATHS": ["/staff/"]}
+        delta, reason = PatternAnalyzer().analyze(make_request(path="/staff/"), make_history())
+        assert delta == 60
+        assert reason == "scan_attempt:/staff/"
 
     def test_high_error_rate(self):
         request = make_request(path="/api/data/")
