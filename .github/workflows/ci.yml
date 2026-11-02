@@ -18,7 +18,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install Ruff
-        run: pip install ruff
+        # Pinned: an unpinned ruff changes the rules on its own (0.16 started
+        # formatting Markdown) and a red lint job skips the whole test matrix.
+        # Keep in sync with the dev extra in pyproject.toml.
+        run: pip install "ruff==0.17.3"
 
       - name: Ruff check
         run: ruff check .
