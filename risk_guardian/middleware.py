@@ -6,6 +6,7 @@ import time
 from importlib import import_module
 
 from django.core.cache import caches
+from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse
 
 from risk_guardian.assessment import RiskAssessment
@@ -15,6 +16,9 @@ from risk_guardian.network import get_client_ip, ip_in
 from risk_guardian.signals import challenge_required, ip_blocked, risk_assessed
 
 logger = logging.getLogger("risk_guardian")
+
+MODES = ("enforce", "observe")
+MONITOR_THRESHOLD = 20
 
 
 def _load_analyzer(dotted_path):
@@ -27,6 +31,9 @@ class RiskGuardianMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
         self._config = get_config()
+        if self._config["MODE"] not in MODES:
+            raise ImproperlyConfigured(f"RISK_GUARDIAN['MODE'] must be one of {MODES}, not {self._config['MODE']!r}")
+        self._observe = self._config["MODE"] == "observe"
         self._analyzers = [_load_analyzer(path) for path in self._config["ANALYZERS"]]
 
     def __call__(self, request):
@@ -47,7 +54,7 @@ class RiskGuardianMiddleware:
         prefix = config["CACHE_PREFIX"]
 
         blocked_key = f"{prefix}:blocked:{ip}"
-        if cache.get(blocked_key):
+        if not self._observe and cache.get(blocked_key):
             return HttpResponse("Too Many Requests", status=config["BLOCK_RESPONSE_CODE"])
 
         session_key = None
@@ -73,14 +80,17 @@ class RiskGuardianMiddleware:
                     )
                 )
 
-        if assessment.score >= config["SCORE_THRESHOLD_BLOCK"]:
-            assessment.blocked = True
-            cache.set(blocked_key, 1, config["BLOCK_TTL_SECONDS"])
-            ip_blocked.send(sender=self.__class__, ip=ip, score=assessment.score, reasons=assessment.reasons)
-            self._log_event("ip_blocked", ip, request, assessment)
-            return HttpResponse("Too Many Requests", status=config["BLOCK_RESPONSE_CODE"])
+        assessment.decision = self._decide(assessment.score)
 
-        if assessment.score >= config["SCORE_THRESHOLD_CHALLENGE"]:
+        if assessment.decision == "block":
+            self._log_event("ip_blocked", ip, request, assessment)
+            if not self._observe:
+                assessment.blocked = True
+                cache.set(blocked_key, 1, config["BLOCK_TTL_SECONDS"])
+                ip_blocked.send(sender=self.__class__, ip=ip, score=assessment.score, reasons=assessment.reasons)
+                return HttpResponse("Too Many Requests", status=config["BLOCK_RESPONSE_CODE"])
+
+        if assessment.decision == "challenge" and not self._observe:
             assessment.challenged = True
             challenge_required.send(sender=self.__class__, ip=ip, request=request, score=assessment.score)
 
@@ -103,20 +113,33 @@ class RiskGuardianMiddleware:
         if assessment.score > 0:
             risk_assessed.send(sender=self.__class__, ip=ip, request=request, assessment=assessment)
 
-        if assessment.score >= 20 or config["LOG_ALL_SCORES"]:
+        if assessment.score >= MONITOR_THRESHOLD or config["LOG_ALL_SCORES"]:
             self._log_event("risk_assessed", ip, request, assessment)
 
-        if assessment.challenged:
+        if assessment.decision == "challenge":
             self._log_event("challenge_required", ip, request, assessment)
 
         return response
 
+    def _decide(self, score: int) -> str:
+        if score >= self._config["SCORE_THRESHOLD_BLOCK"]:
+            return "block"
+        if score >= self._config["SCORE_THRESHOLD_CHALLENGE"]:
+            return "challenge"
+        if score >= MONITOR_THRESHOLD:
+            return "monitor"
+        return "allow"
+
     def _log_event(self, event: str, ip: str, request, assessment: RiskAssessment):
-        request_id = getattr(request, "request_id", None) or ""
+        request_id = getattr(request, "request_id", None) or request.META.get(self._config["REQUEST_ID_META_KEY"], "")
         log_data = json.dumps(
             {
                 "event": event,
+                "mode": self._config["MODE"],
+                "decision": assessment.decision,
                 "ip": ip,
+                "method": request.method,
+                "path": request.path,
                 "request_id": request_id,
                 "score": assessment.score,
                 "reasons": assessment.reasons,

@@ -2,9 +2,15 @@ from django.conf import settings
 
 DEFAULTS = {
     "ENABLED": True,
+    # "enforce" blocks and challenges; "observe" only scores and logs the
+    # decision it would have taken, to calibrate thresholds on real traffic.
+    "MODE": "enforce",
     "CACHE_BACKEND": "default",
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    # META key of the request id set by the proxy, logged with every event so
+    # it can be matched with the proxy's access log. Used only for logging.
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",
     "SCORE_THRESHOLD_BLOCK": 80,
     "SCORE_THRESHOLD_CHALLENGE": 50,
     "BLOCK_RESPONSE_CODE": 429,

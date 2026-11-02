@@ -47,6 +47,12 @@ Cada analyzer contribui com um delta e uma razão. O score composto é comparado
 
 Os limiares de Challenge e Block são configuráveis via `SCORE_THRESHOLD_CHALLENGE` e `SCORE_THRESHOLD_BLOCK`.
 
+### Modo observação
+
+Com `"MODE": "observe"` o middleware calcula o score e registra a decisão que tomaria, mas não age: nunca responde 429, não grava bloqueio no cache (e ignora bloqueios antigos), não marca `request.risk.challenged` e não dispara os signals `ip_blocked` e `challenge_required`. A decisão fica em `request.risk.decision` (`allow`, `monitor`, `challenge` ou `block`) e no campo `decision` dos logs.
+
+Use ao instalar o pacote num projeto em produção: depois de uma ou duas semanas de tráfego real, os eventos com `decision` `challenge` e `block` mostram o que seria barrado, e os limiares (ou a `ALLOWLIST_IPS`) são ajustados antes de passar a `"enforce"`.
+
 ### Why Risk Guardian?
 
 Cada camada de defesa enxerga uma dimensão diferente do tráfego:
@@ -119,9 +125,11 @@ Todos os parâmetros têm defaults funcionais. Sobrescreva apenas o necessário:
 RISK_GUARDIAN = {
     # Comportamento geral
     "ENABLED": True,
+    "MODE": "enforce",                    # ou "observe" (ver "Modo observação")
     "CACHE_BACKEND": "default",           # backend do Django cache (deve ser Redis)
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",  # id da requisição nos logs
 
     # Thresholds (0–100)
     "SCORE_THRESHOLD_BLOCK": 80,          # bloqueia a requisição
@@ -382,14 +390,29 @@ O middleware emite JSON estruturado via logger `risk_guardian`:
 ```json
 {
   "event": "ip_blocked",
+  "mode": "enforce",
+  "decision": "block",
   "ip": "1.2.3.4",
+  "method": "POST",
+  "path": "/accounts/login/",
+  "request_id": "abc-123",
   "score": 85,
-  "reasons": ["high_rate", "missing_ua"],
-  "request_id": "abc-123"
+  "reasons": ["high_rate", "missing_ua"]
 }
 ```
 
-Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`. O `path` vai sem a query string, que pode carregar tokens. O `request_id` vem do atributo `request.request_id` ou, sem ele, de `REQUEST_ID_META_KEY` — o mesmo id que o proxy grava no log de acesso, para cruzar os dois.
+
+Os eventos `risk_assessed` e `challenge_required` são `INFO`: o projeto precisa encaminhar o logger `risk_guardian` nesse nível, senão só os `WARNING` (`ip_blocked`) aparecem:
+
+```python
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"risk_guardian": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}
+```
 
 O evento `email_risk_assessed` loga apenas o **domínio** do e-mail, nunca o endereço completo.
 
@@ -442,6 +465,12 @@ Each analyzer contributes a delta and a reason. The composite score is compared 
 | **80+** | Block | HTTP 429 and the IP is blocked for `BLOCK_TTL_SECONDS` |
 
 Challenge and Block thresholds are configurable via `SCORE_THRESHOLD_CHALLENGE` and `SCORE_THRESHOLD_BLOCK`.
+
+### Observe mode
+
+With `"MODE": "observe"` the middleware scores the request and logs the decision it would take, but does not act: it never answers 429, writes no block to the cache (and ignores existing ones), does not set `request.risk.challenged` and does not send the `ip_blocked` and `challenge_required` signals. The decision is in `request.risk.decision` (`allow`, `monitor`, `challenge` or `block`) and in the `decision` field of the logs.
+
+Use it when adding the package to a project already in production: after a week or two of real traffic, the events with `decision` `challenge` and `block` show what would be stopped, and the thresholds (or `ALLOWLIST_IPS`) are tuned before switching to `"enforce"`.
 
 ### Why Risk Guardian?
 
@@ -515,9 +544,11 @@ All parameters have functional defaults. Override only what you need:
 RISK_GUARDIAN = {
     # General behavior
     "ENABLED": True,
+    "MODE": "enforce",                    # or "observe" (see "Observe mode")
     "CACHE_BACKEND": "default",           # Django cache backend (should be Redis)
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",  # request id in the logs
 
     # Thresholds (0–100)
     "SCORE_THRESHOLD_BLOCK": 80,          # blocks the request
@@ -778,14 +809,29 @@ The middleware emits structured JSON via the `risk_guardian` logger:
 ```json
 {
   "event": "ip_blocked",
+  "mode": "enforce",
+  "decision": "block",
   "ip": "1.2.3.4",
+  "method": "POST",
+  "path": "/accounts/login/",
+  "request_id": "abc-123",
   "score": 85,
-  "reasons": ["high_rate", "missing_ua"],
-  "request_id": "abc-123"
+  "reasons": ["high_rate", "missing_ua"]
 }
 ```
 
-Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`. `path` has no query string, which may carry tokens. `request_id` comes from the `request.request_id` attribute or, without it, from `REQUEST_ID_META_KEY` — the same id the proxy writes to its access log, so both can be matched.
+
+`risk_assessed` and `challenge_required` are `INFO`: the project must route the `risk_guardian` logger at that level, or only `WARNING` events (`ip_blocked`) show up:
+
+```python
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"risk_guardian": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}
+```
 
 The `email_risk_assessed` event logs only the email **domain**, never the full address.
 

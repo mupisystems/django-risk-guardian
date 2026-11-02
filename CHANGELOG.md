@@ -22,6 +22,14 @@ Security).
 
 ### Added
 
+- `MODE`: `"enforce"` (default) or `"observe"`. In observe mode the middleware
+  scores and logs the decision it would take but never blocks, never sets
+  `request.risk.challenged` and sends no `ip_blocked`/`challenge_required`
+  signals — for calibrating thresholds on production traffic.
+- `request.risk.decision` (`allow`, `monitor`, `challenge`, `block`) and, in
+  every log event, `mode`, `decision`, `method` and `path` (without the query
+  string). `request_id` falls back to `REQUEST_ID_META_KEY`
+  (`HTTP_X_REQUEST_ID`), so events can be matched with the proxy's access log.
 - `GeoAnalyzer`: scores the country the web server or the CDN resolved, read
   from `GEO_COUNTRY_META_KEY` — `unexpected_country:XX` outside
   `GEO_ALLOWED_COUNTRIES` and `tor_exit` for Cloudflare's `T1`. Does nothing
