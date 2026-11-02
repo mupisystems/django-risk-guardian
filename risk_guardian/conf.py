@@ -2,9 +2,15 @@ from django.conf import settings
 
 DEFAULTS = {
     "ENABLED": True,
+    # "enforce" blocks and challenges; "observe" only scores and logs the
+    # decision it would have taken, to calibrate thresholds on real traffic.
+    "MODE": "enforce",
     "CACHE_BACKEND": "default",
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    # META key of the request id set by the proxy, logged with every event so
+    # it can be matched with the proxy's access log. Used only for logging.
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",
     "SCORE_THRESHOLD_BLOCK": 80,
     "SCORE_THRESHOLD_CHALLENGE": 50,
     "BLOCK_RESPONSE_CODE": 429,
@@ -17,12 +23,38 @@ DEFAULTS = {
         "/__debug__/",
         "/favicon.ico",
     ],
+    # Client IP resolution. By default only REMOTE_ADDR is used: a header set
+    # by the client can be forged. Set CLIENT_IP_HEADER (a META key, e.g.
+    # "HTTP_X_FORWARDED_FOR") and list the proxies that set it in
+    # TRUSTED_PROXIES; the header is read only when the request comes from one.
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
+    # IPs and networks (CIDR) that are never scored nor blocked.
+    "ALLOWLIST_IPS": [],
+    # Scan paths added to the built-in list of PatternAnalyzer.
+    "EXTRA_SCAN_PATHS": [],
+    # Authentication tracking (logins and signups per IP), read by AuthAnalyzer.
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
+    # Country of the request, resolved by the web server or the CDN (GeoAnalyzer).
+    # Prefer a key set by the server, e.g. "GEOIP_COUNTRY_CODE" from nginx's
+    # geoip2 module; an "HTTP_" key (a header) is read only from TRUSTED_PROXIES.
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
         "risk_guardian.analyzers.UserAgentAnalyzer",
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 

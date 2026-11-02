@@ -95,12 +95,13 @@ class TestRiskGuardianMiddleware:
         middleware = self._get_middleware()
         request = self._make_request()
 
-        # Score between challenge (50) and block (80)
-        for analyzer in middleware._analyzers:
-            analyzer.analyze = MagicMock(return_value=(12, "test"))
+        # Score between challenge (50) and block (80), whatever the number of analyzers
+        first, *others = middleware._analyzers
+        first.analyze = MagicMock(return_value=(60, "test"))
+        for analyzer in others:
+            analyzer.analyze = MagicMock(return_value=(0, None))
 
         response = middleware(request)
-        # 5 * 12 = 60, above 50 challenge but below 80 block
         assert response.status_code == 200
         assert request.risk.challenged is True
         assert request.risk.blocked is False

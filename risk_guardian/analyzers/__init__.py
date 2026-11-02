@@ -1,5 +1,7 @@
+from risk_guardian.analyzers.auth import AuthAnalyzer
 from risk_guardian.analyzers.base import BaseAnalyzer
 from risk_guardian.analyzers.email import EmailAnalyzer
+from risk_guardian.analyzers.geo import GeoAnalyzer
 from risk_guardian.analyzers.pattern import PatternAnalyzer
 from risk_guardian.analyzers.rate import RateAnalyzer
 from risk_guardian.analyzers.session import SessionAnalyzer
@@ -7,8 +9,10 @@ from risk_guardian.analyzers.timing import TimingAnalyzer
 from risk_guardian.analyzers.user_agent import UserAgentAnalyzer
 
 __all__ = [
+    "AuthAnalyzer",
     "BaseAnalyzer",
     "EmailAnalyzer",
+    "GeoAnalyzer",
     "RateAnalyzer",
     "UserAgentAnalyzer",
     "SessionAnalyzer",

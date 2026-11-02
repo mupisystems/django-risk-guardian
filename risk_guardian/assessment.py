@@ -11,6 +11,9 @@ class RiskAssessment:
     reasons: list[str] = field(default_factory=list)
     blocked: bool = False
     challenged: bool = False
+    # "allow", "monitor", "challenge" or "block" — set in both modes, so an
+    # observe-mode deployment still tells what enforce mode would have done.
+    decision: str = "allow"
     history: AccessHistory | None = None
 
     def add(self, delta: int, reason: str | None) -> None:
@@ -26,4 +29,5 @@ class RiskAssessment:
             "reasons": self.reasons,
             "blocked": self.blocked,
             "challenged": self.challenged,
+            "decision": self.decision,
         }

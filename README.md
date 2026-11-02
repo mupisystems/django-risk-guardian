@@ -47,6 +47,12 @@ Cada analyzer contribui com um delta e uma razão. O score composto é comparado
 
 Os limiares de Challenge e Block são configuráveis via `SCORE_THRESHOLD_CHALLENGE` e `SCORE_THRESHOLD_BLOCK`.
 
+### Modo observação
+
+Com `"MODE": "observe"` o middleware calcula o score e registra a decisão que tomaria, mas não age: nunca responde 429, não grava bloqueio no cache (e ignora bloqueios antigos), não marca `request.risk.challenged` e não dispara os signals `ip_blocked` e `challenge_required`. A decisão fica em `request.risk.decision` (`allow`, `monitor`, `challenge` ou `block`) e no campo `decision` dos logs.
+
+Use ao instalar o pacote num projeto em produção: depois de uma ou duas semanas de tráfego real, os eventos com `decision` `challenge` e `block` mostram o que seria barrado, e os limiares (ou a `ALLOWLIST_IPS`) são ajustados antes de passar a `"enforce"`.
+
 ### Why Risk Guardian?
 
 Cada camada de defesa enxerga uma dimensão diferente do tráfego:
@@ -77,14 +83,33 @@ pip install django-risk-guardian
 ```
 
 ```python
-# settings.py (3 linhas)
+# settings.py
 INSTALLED_APPS += ["risk_guardian"]
 
 MIDDLEWARE = [
-    "risk_guardian.middleware.RiskGuardianMiddleware",
+    # ...
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "risk_guardian.middleware.RiskGuardianMiddleware",  # depois do SessionMiddleware
     # ... demais middlewares
 ]
 ```
+
+O middleware precisa vir **depois** do `SessionMiddleware`: antes dele, `request.session` não existe e o `SessionAnalyzer` não enxerga nenhuma sessão.
+
+### IP do cliente
+
+Por padrão o IP é o `REMOTE_ADDR`, o único valor que o cliente não escolhe. Atrás de um proxy reverso, prefira corrigir o `REMOTE_ADDR` no próprio proxy (por exemplo, `real_ip` no nginx). Se precisar ler um cabeçalho, informe qual e quem pode enviá-lo:
+
+```python
+RISK_GUARDIAN = {
+    "CLIENT_IP_HEADER": "HTTP_X_FORWARDED_FOR",   # chave do request.META
+    "TRUSTED_PROXIES": ["10.0.0.0/8"],            # quem pode definir o cabeçalho
+}
+```
+
+O cabeçalho só é lido quando a requisição vem de um `TRUSTED_PROXIES`, e o cliente é o endereço mais à direita que não é proxy confiável. Confiar num cabeçalho sem essa checagem deixa o atacante escolher o próprio IP: ele escapa do bloqueio e pode fazer o middleware bloquear o IP de outra pessoa.
+
+IPs e redes em `ALLOWLIST_IPS` (aceita CIDR) nunca são pontuados nem bloqueados — útil para escritórios e balcões onde muita gente entra pelo mesmo IP.
 
 ### Requisitos
 
@@ -100,9 +125,11 @@ Todos os parâmetros têm defaults funcionais. Sobrescreva apenas o necessário:
 RISK_GUARDIAN = {
     # Comportamento geral
     "ENABLED": True,
+    "MODE": "enforce",                    # ou "observe" (ver "Modo observação")
     "CACHE_BACKEND": "default",           # backend do Django cache (deve ser Redis)
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",  # id da requisição nos logs
 
     # Thresholds (0–100)
     "SCORE_THRESHOLD_BLOCK": 80,          # bloqueia a requisição
@@ -119,6 +146,28 @@ RISK_GUARDIAN = {
     # Paths ignorados
     "IGNORE_PATHS": ["/health/", "/metrics/", "/__debug__/", "/favicon.ico"],
 
+    # IP do cliente (ver "IP do cliente")
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
+    "ALLOWLIST_IPS": [],
+
+    # Paths de varredura somados à lista do PatternAnalyzer
+    "EXTRA_SCAN_PATHS": [],
+
+    # Logins e cadastros por IP (AuthAnalyzer)
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
+
+    # País da requisição (GeoAnalyzer)
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
+
     # Analyzers ativos (ordem importa)
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
@@ -126,6 +175,8 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 ```
@@ -140,6 +191,7 @@ Todas as chaves usam o `CACHE_PREFIX` configurado (default `rg`):
 | `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Histórico deslizante da sessão |
 | `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Flag de IP bloqueado (checada antes de qualquer análise) |
 | `{prefix}:sess_set:{ip}` | 300 | Conjunto de sessões distintas vistas no IP |
+| `{prefix}:auth:{ok\|fail\|signup}:{ip}` | `AUTH_WINDOW_SECONDS` + 60 | Contas que logaram, falharam ou se cadastraram no IP (hash, nunca o e-mail) |
 
 Cada entrada de histórico guarda `ts`, `path`, `method`, `status`, `ua` (truncado em 100 chars) e `duration_ms`. A lista é limitada a `HISTORY_MAX_REQUESTS` entradas.
 
@@ -188,11 +240,76 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`, `emai
 
 | Analyzer | Detecta | Score máximo | Reasons emitidos |
 |---|---|---|---|
-| **RateAnalyzer** | Volume anormal de requisições por IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
-| **UserAgentAnalyzer** | UAs de bots, browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **RateAnalyzer** | Volume anormal de requisições por IP (a partir de 5 amostras) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **UserAgentAnalyzer** | UAs de bots, UA mínimo (`Mozilla/5.0` sem plataforma), browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `minimal_ua`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
-| **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **PatternAnalyzer** | Paths de scan (.env, wp-admin, painéis admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Intervalos artificialmente regulares entre requisições | +30 | `robotic_timing` |
+| **AuthAnalyzer** | Muitas contas logando ou falhando no mesmo IP, cadastros em série | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+| **GeoAnalyzer** | País fora da lista permitida, rede Tor (país resolvido pelo servidor web ou pela CDN) | +40 | `unexpected_country:NL`, `tor_exit` |
+
+### AuthAnalyzer (credential stuffing e cadastro automatizado)
+
+Quem testa uma lista de e-mails e senhas roubados tenta uma ou duas vezes por conta, então o bloqueio por conta nunca dispara. O sinal é a quantidade de **contas distintas** que um mesmo IP toca numa janela (`AUTH_WINDOW_SECONDS`, padrão 1 h).
+
+Os receivers do pacote registram cada login (`user_logged_in`), falha (`user_login_failed`) e, com django-allauth instalado, cadastro (`user_signed_up`). As contas são guardadas como hash com a `SECRET_KEY` — o cache não guarda e-mail nem usuário.
+
+| Situação no IP, dentro da janela | Delta | Reason |
+|---|---|---|
+| 5+ contas com falha (`AUTH_FAILED_ACCOUNTS_BLOCK`) | +80 | `credential_stuffing` |
+| 3+ contas com falha (`AUTH_FAILED_ACCOUNTS_CHALLENGE`) | +50 | `failed_logins_many_accounts` |
+| 5+ contas distintas (`AUTH_ACCOUNTS_CHALLENGE`) | +50 | `logins_many_accounts` |
+| 3+ contas distintas (`AUTH_ACCOUNTS_MONITOR`) | +20 | `logins_several_accounts` |
+| 3+ cadastros (`AUTH_SIGNUPS_CHALLENGE`) | +50 | `signup_velocity` |
+
+Falhas pesam mais que acertos: num escritório, dez pessoas entrando pelo mesmo IP raramente erram a senha de cinco contas diferentes; uma lista de senhas roubadas erra em cerca de metade. Por isso, sozinho, o escritório chega no máximo a **Challenge** e nunca a **Block**.
+
+O login acontece dentro da view, depois da decisão do middleware. Os receivers somam o sinal ao `request.risk` da própria requisição (a view pode reagir na hora) e o `AuthAnalyzer` aplica o acumulado em todas as requisições seguintes do IP — é ali que o desafio ou o bloqueio acontece.
+
+Fluxos próprios de login ou cadastro podem registrar eventos diretamente:
+
+```python
+from risk_guardian.auth_tracking import SIGNUP, record_auth_event
+
+record_auth_event(request, SIGNUP, user.email)
+```
+
+O teste `tests/test_attack_replay.py` reproduz um credential stuffing típico — lista de senhas roubadas, uma ou duas tentativas por conta, cerca de metade das senhas já trocadas e user agent `Mozilla/5.0` puro: o IP toma uma conta e é bloqueado no 15º segundo.
+
+### GeoAnalyzer (país da requisição)
+
+O `GeoAnalyzer` não consulta base nenhuma: lê o código do país que o servidor web ou a CDN já resolveu, na chave `GEO_COUNTRY_META_KEY` do `request.META`. Sem essa chave configurada, não faz nada.
+
+| Situação | Delta | Reason |
+|---|---|---|
+| País `T1` (rede Tor, código do Cloudflare) | +40 (`GEO_TOR_SCORE`) | `tor_exit` |
+| País fora de `GEO_ALLOWED_COUNTRIES` | +25 (`GEO_UNEXPECTED_COUNTRY_SCORE`) | `unexpected_country:XX` |
+| País desconhecido (`XX`, vazio) ou lista vazia | 0 | — |
+
+Sozinho, um país inesperado fica em **Monitor**; somado a outro sinal (UA mínimo, muitas contas no IP), passa a **Challenge** ou **Block**.
+
+**Com nginx (recomendado).** O módulo [geoip2](https://github.com/leev/ngx_http_geoip2_module) (`libnginx-mod-http-geoip2` no Debian/Ubuntu) consulta uma base `.mmdb` local (DB-IP Lite, IPinfo Lite ou MaxMind GeoLite2) e entrega o país à aplicação numa variável **sem o prefixo `HTTP_`** — que o cliente não tem como forjar, já que todo cabeçalho chega com esse prefixo:
+
+```nginx
+# http { }
+geoip2 /var/lib/geoip/dbip-country-lite.mmdb {
+    $geoip2_country country iso_code;
+}
+
+# location que repassa ao uWSGI (ou fastcgi_param / proxy_set_header no gunicorn)
+uwsgi_param GEOIP_COUNTRY_CODE $geoip2_country;
+```
+
+```python
+RISK_GUARDIAN = {
+    "GEO_COUNTRY_META_KEY": "GEOIP_COUNTRY_CODE",
+    "GEO_ALLOWED_COUNTRIES": ["BR"],
+}
+```
+
+Com gunicorn atrás de `proxy_pass` não existe variável fora do `HTTP_`: o nginx precisa sobrescrever o cabeçalho (`proxy_set_header X-Geo-Country $geoip2_country;`) e a chave vira `HTTP_X_GEO_COUNTRY`, lida só de `TRUSTED_PROXIES`.
+
+**Com Cloudflare.** A chave `HTTP_CF_IPCOUNTRY` é um cabeçalho, então só é lida quando o `REMOTE_ADDR` está em `TRUSTED_PROXIES` (as faixas do Cloudflare). Se o nginx reescreve o `REMOTE_ADDR` com `real_ip`, a origem do Cloudflare já não aparece para o Django: nesse caso passe o país pelo nginx, como acima, usando `$http_cf_ipcountry`.
 
 ### EmailAnalyzer (login e cadastro)
 
@@ -273,14 +390,29 @@ O middleware emite JSON estruturado via logger `risk_guardian`:
 ```json
 {
   "event": "ip_blocked",
+  "mode": "enforce",
+  "decision": "block",
   "ip": "1.2.3.4",
+  "method": "POST",
+  "path": "/accounts/login/",
+  "request_id": "abc-123",
   "score": 85,
-  "reasons": ["high_rate", "missing_ua"],
-  "request_id": "abc-123"
+  "reasons": ["high_rate", "missing_ua"]
 }
 ```
 
-Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+Eventos emitidos: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`. O `path` vai sem a query string, que pode carregar tokens. O `request_id` vem do atributo `request.request_id` ou, sem ele, de `REQUEST_ID_META_KEY` — o mesmo id que o proxy grava no log de acesso, para cruzar os dois.
+
+Os eventos `risk_assessed` e `challenge_required` são `INFO`: o projeto precisa encaminhar o logger `risk_guardian` nesse nível, senão só os `WARNING` (`ip_blocked`) aparecem:
+
+```python
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"risk_guardian": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}
+```
 
 O evento `email_risk_assessed` loga apenas o **domínio** do e-mail, nunca o endereço completo.
 
@@ -334,6 +466,12 @@ Each analyzer contributes a delta and a reason. The composite score is compared 
 
 Challenge and Block thresholds are configurable via `SCORE_THRESHOLD_CHALLENGE` and `SCORE_THRESHOLD_BLOCK`.
 
+### Observe mode
+
+With `"MODE": "observe"` the middleware scores the request and logs the decision it would take, but does not act: it never answers 429, writes no block to the cache (and ignores existing ones), does not set `request.risk.challenged` and does not send the `ip_blocked` and `challenge_required` signals. The decision is in `request.risk.decision` (`allow`, `monitor`, `challenge` or `block`) and in the `decision` field of the logs.
+
+Use it when adding the package to a project already in production: after a week or two of real traffic, the events with `decision` `challenge` and `block` show what would be stopped, and the thresholds (or `ALLOWLIST_IPS`) are tuned before switching to `"enforce"`.
+
 ### Why Risk Guardian?
 
 Each defense layer sees a different dimension of traffic:
@@ -364,14 +502,33 @@ pip install django-risk-guardian
 ```
 
 ```python
-# settings.py (3 lines)
+# settings.py
 INSTALLED_APPS += ["risk_guardian"]
 
 MIDDLEWARE = [
-    "risk_guardian.middleware.RiskGuardianMiddleware",
+    # ...
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "risk_guardian.middleware.RiskGuardianMiddleware",  # after SessionMiddleware
     # ... other middlewares
 ]
 ```
+
+The middleware must come **after** `SessionMiddleware`: before it, `request.session` does not exist and `SessionAnalyzer` sees no session at all.
+
+### Client IP
+
+By default the IP is `REMOTE_ADDR`, the only value the client cannot choose. Behind a reverse proxy, prefer fixing `REMOTE_ADDR` in the proxy itself (e.g. nginx `real_ip`). If you need to read a header, say which one and who may send it:
+
+```python
+RISK_GUARDIAN = {
+    "CLIENT_IP_HEADER": "HTTP_X_FORWARDED_FOR",   # request.META key
+    "TRUSTED_PROXIES": ["10.0.0.0/8"],            # who may set the header
+}
+```
+
+The header is read only when the request comes from one of `TRUSTED_PROXIES`, and the client is the rightmost address that is not a trusted proxy. Trusting a header without that check lets an attacker pick their own IP: they dodge the block and can get the middleware to block someone else's IP.
+
+IPs and networks in `ALLOWLIST_IPS` (CIDR accepted) are never scored nor blocked — useful for offices and front desks where many people share one IP.
 
 ### Requirements
 
@@ -387,9 +544,11 @@ All parameters have functional defaults. Override only what you need:
 RISK_GUARDIAN = {
     # General behavior
     "ENABLED": True,
+    "MODE": "enforce",                    # or "observe" (see "Observe mode")
     "CACHE_BACKEND": "default",           # Django cache backend (should be Redis)
     "CACHE_PREFIX": "rg",
     "LOG_ALL_SCORES": False,
+    "REQUEST_ID_META_KEY": "HTTP_X_REQUEST_ID",  # request id in the logs
 
     # Thresholds (0–100)
     "SCORE_THRESHOLD_BLOCK": 80,          # blocks the request
@@ -406,6 +565,28 @@ RISK_GUARDIAN = {
     # Ignored paths
     "IGNORE_PATHS": ["/health/", "/metrics/", "/__debug__/", "/favicon.ico"],
 
+    # Client IP (see "Client IP")
+    "CLIENT_IP_HEADER": None,
+    "TRUSTED_PROXIES": [],
+    "ALLOWLIST_IPS": [],
+
+    # Scan paths added to PatternAnalyzer's list
+    "EXTRA_SCAN_PATHS": [],
+
+    # Logins and signups per IP (AuthAnalyzer)
+    "AUTH_WINDOW_SECONDS": 3600,
+    "AUTH_ACCOUNTS_MONITOR": 3,
+    "AUTH_ACCOUNTS_CHALLENGE": 5,
+    "AUTH_FAILED_ACCOUNTS_CHALLENGE": 3,
+    "AUTH_FAILED_ACCOUNTS_BLOCK": 5,
+    "AUTH_SIGNUPS_CHALLENGE": 3,
+
+    # Country of the request (GeoAnalyzer)
+    "GEO_COUNTRY_META_KEY": None,
+    "GEO_ALLOWED_COUNTRIES": [],
+    "GEO_UNEXPECTED_COUNTRY_SCORE": 25,
+    "GEO_TOR_SCORE": 40,
+
     # Active analyzers (order matters)
     "ANALYZERS": [
         "risk_guardian.analyzers.RateAnalyzer",
@@ -413,6 +594,8 @@ RISK_GUARDIAN = {
         "risk_guardian.analyzers.SessionAnalyzer",
         "risk_guardian.analyzers.PatternAnalyzer",
         "risk_guardian.analyzers.TimingAnalyzer",
+        "risk_guardian.analyzers.AuthAnalyzer",
+        "risk_guardian.analyzers.GeoAnalyzer",
     ],
 }
 ```
@@ -427,6 +610,7 @@ All keys use the configured `CACHE_PREFIX` (default `rg`):
 | `{prefix}:hist:sess:{session_key}` | `HISTORY_WINDOW_SECONDS` + 60 | Sliding history for the session |
 | `{prefix}:blocked:{ip}` | `BLOCK_TTL_SECONDS` | Blocked-IP flag (checked before any analysis) |
 | `{prefix}:sess_set:{ip}` | 300 | Set of distinct sessions seen for the IP |
+| `{prefix}:auth:{ok\|fail\|signup}:{ip}` | `AUTH_WINDOW_SECONDS` + 60 | Accounts that logged in, failed or signed up from the IP (hashed, never the e-mail) |
 
 Each history entry stores `ts`, `path`, `method`, `status`, `ua` (truncated to 100 chars) and `duration_ms`. The list is capped at `HISTORY_MAX_REQUESTS` entries.
 
@@ -475,11 +659,76 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_r
 
 | Analyzer | Detects | Max score | Emitted reasons |
 |---|---|---|---|
-| **RateAnalyzer** | Abnormal request volume per IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
-| **UserAgentAnalyzer** | Bot UAs, outdated browsers, missing UA | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
+| **RateAnalyzer** | Abnormal request volume per IP (from 5 samples on) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **UserAgentAnalyzer** | Bot UAs, minimal UA (`Mozilla/5.0` with no platform), outdated browsers, missing UA | +40 | `bot_ua:curl`, `minimal_ua`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
-| **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
+| **PatternAnalyzer** | Scan paths (.env, wp-admin, admin panels), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
 | **TimingAnalyzer** | Artificially regular intervals between requests | +30 | `robotic_timing` |
+| **AuthAnalyzer** | Many accounts logging in or failing from one IP, serial signups | +80 | `credential_stuffing`, `failed_logins_many_accounts`, `logins_many_accounts`, `logins_several_accounts`, `signup_velocity` |
+| **GeoAnalyzer** | Country outside the allowed list, Tor network (country resolved by the web server or the CDN) | +40 | `unexpected_country:NL`, `tor_exit` |
+
+### AuthAnalyzer (credential stuffing and automated signup)
+
+Whoever tests a list of stolen e-mails and passwords tries once or twice per account, so per-account lockouts never fire. The signal is the number of **distinct accounts** one IP touches inside a window (`AUTH_WINDOW_SECONDS`, 1 h by default).
+
+The bundled receivers record every login (`user_logged_in`), failure (`user_login_failed`) and, with django-allauth installed, signup (`user_signed_up`). Accounts are stored as a hash keyed with `SECRET_KEY` — the cache holds no e-mail or username.
+
+| Situation for the IP, inside the window | Delta | Reason |
+|---|---|---|
+| 5+ accounts with failures (`AUTH_FAILED_ACCOUNTS_BLOCK`) | +80 | `credential_stuffing` |
+| 3+ accounts with failures (`AUTH_FAILED_ACCOUNTS_CHALLENGE`) | +50 | `failed_logins_many_accounts` |
+| 5+ distinct accounts (`AUTH_ACCOUNTS_CHALLENGE`) | +50 | `logins_many_accounts` |
+| 3+ distinct accounts (`AUTH_ACCOUNTS_MONITOR`) | +20 | `logins_several_accounts` |
+| 3+ signups (`AUTH_SIGNUPS_CHALLENGE`) | +50 | `signup_velocity` |
+
+Failures weigh more than successes: in an office, ten people logging in from one IP rarely mistype the password of five different accounts; a stolen-password list fails on about half of them. On its own, the office reaches **Challenge** at most, never **Block**.
+
+The login runs inside the view, after the middleware has decided. The receivers add the signal to that request's `request.risk` (the view can react right away) and `AuthAnalyzer` applies the accumulated signal to every following request from the IP — that is where the challenge or the block lands.
+
+Custom login or signup flows can record events directly:
+
+```python
+from risk_guardian.auth_tracking import SIGNUP, record_auth_event
+
+record_auth_event(request, SIGNUP, user.email)
+```
+
+`tests/test_attack_replay.py` replays a typical credential stuffing run — a stolen-password list, one or two attempts per account, about half of the passwords already changed and a bare `Mozilla/5.0` user agent: the IP takes one account and is blocked at the 15th second.
+
+### GeoAnalyzer (country of the request)
+
+`GeoAnalyzer` does no lookup: it reads the country code the web server or the CDN already resolved, from `request.META[GEO_COUNTRY_META_KEY]`. Without that key it does nothing.
+
+| Situation | Delta | Reason |
+|---|---|---|
+| Country `T1` (Tor network, Cloudflare's code) | +40 (`GEO_TOR_SCORE`) | `tor_exit` |
+| Country outside `GEO_ALLOWED_COUNTRIES` | +25 (`GEO_UNEXPECTED_COUNTRY_SCORE`) | `unexpected_country:XX` |
+| Unknown country (`XX`, empty) or empty list | 0 | — |
+
+On its own, an unexpected country stays at **Monitor**; added to another signal (minimal UA, many accounts on the IP) it reaches **Challenge** or **Block**.
+
+**With nginx (recommended).** The [geoip2](https://github.com/leev/ngx_http_geoip2_module) module (`libnginx-mod-http-geoip2` on Debian/Ubuntu) looks up a local `.mmdb` database (DB-IP Lite, IPinfo Lite or MaxMind GeoLite2) and hands the country to the application in a variable **without the `HTTP_` prefix** — which the client cannot forge, since every header arrives with that prefix:
+
+```nginx
+# http { }
+geoip2 /var/lib/geoip/dbip-country-lite.mmdb {
+    $geoip2_country country iso_code;
+}
+
+# location that passes to uWSGI (or fastcgi_param / proxy_set_header for gunicorn)
+uwsgi_param GEOIP_COUNTRY_CODE $geoip2_country;
+```
+
+```python
+RISK_GUARDIAN = {
+    "GEO_COUNTRY_META_KEY": "GEOIP_COUNTRY_CODE",
+    "GEO_ALLOWED_COUNTRIES": ["BR"],
+}
+```
+
+With gunicorn behind `proxy_pass` there is no variable outside `HTTP_`: nginx must overwrite the header (`proxy_set_header X-Geo-Country $geoip2_country;`) and the key becomes `HTTP_X_GEO_COUNTRY`, read only from `TRUSTED_PROXIES`.
+
+**With Cloudflare.** `HTTP_CF_IPCOUNTRY` is a header, so it is read only when `REMOTE_ADDR` is in `TRUSTED_PROXIES` (Cloudflare's ranges). If nginx rewrites `REMOTE_ADDR` with `real_ip`, the Cloudflare origin is no longer visible to Django: pass the country through nginx instead, as above, using `$http_cf_ipcountry`.
 
 ### EmailAnalyzer (login and signup)
 
@@ -560,14 +809,29 @@ The middleware emits structured JSON via the `risk_guardian` logger:
 ```json
 {
   "event": "ip_blocked",
+  "mode": "enforce",
+  "decision": "block",
   "ip": "1.2.3.4",
+  "method": "POST",
+  "path": "/accounts/login/",
+  "request_id": "abc-123",
   "score": 85,
-  "reasons": ["high_rate", "missing_ua"],
-  "request_id": "abc-123"
+  "reasons": ["high_rate", "missing_ua"]
 }
 ```
 
-Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`.
+Emitted events: `risk_assessed`, `ip_blocked`, `challenge_required`, `analyzer_error`, `email_risk_assessed`. `path` has no query string, which may carry tokens. `request_id` comes from the `request.request_id` attribute or, without it, from `REQUEST_ID_META_KEY` — the same id the proxy writes to its access log, so both can be matched.
+
+`risk_assessed` and `challenge_required` are `INFO`: the project must route the `risk_guardian` logger at that level, or only `WARNING` events (`ip_blocked`) show up:
+
+```python
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"risk_guardian": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}
+```
 
 The `email_risk_assessed` event logs only the email **domain**, never the full address.
 
