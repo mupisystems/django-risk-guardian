@@ -36,6 +36,8 @@ class TestRateAnalyzer:
     def test_high_rate(self):
         request = make_request()
         history = make_history()
+        for _ in range(65):
+            history.record(make_entry())
         with patch.object(history, "requests_per_minute", return_value=65.0):
             analyzer = RateAnalyzer()
             delta, reason = analyzer.analyze(request, history)
@@ -45,11 +47,20 @@ class TestRateAnalyzer:
     def test_critical_rate(self):
         request = make_request()
         history = make_history()
+        for _ in range(100):
+            history.record(make_entry())
         with patch.object(history, "requests_per_minute", return_value=125.0):
             analyzer = RateAnalyzer()
             delta, reason = analyzer.analyze(request, history)
             assert delta == 50
             assert reason == "critical_rate"
+
+    def test_too_few_samples_no_signal(self):
+        # A form loaded and posted one second apart extrapolates to 120 rpm.
+        request = make_request()
+        history = make_history(entries=[make_entry(), make_entry()])
+        with patch.object(history, "requests_per_minute", return_value=120.0):
+            assert RateAnalyzer().analyze(request, history) == (0, None)
 
 
 # ── UserAgentAnalyzer ──

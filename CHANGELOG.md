@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `RateAnalyzer` no longer extrapolates a rate from fewer than 5 requests
+  (`min_samples`): a form loaded and submitted one second apart read as
+  120 requests per minute and scored `critical_rate`.
 - README: the middleware goes after `SessionMiddleware`; placed first, it never
   sees the session.
 

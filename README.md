@@ -209,7 +209,7 @@ Signals disponíveis: `ip_blocked`, `risk_assessed`, `challenge_required`, `emai
 
 | Analyzer | Detecta | Score máximo | Reasons emitidos |
 |---|---|---|---|
-| **RateAnalyzer** | Volume anormal de requisições por IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **RateAnalyzer** | Volume anormal de requisições por IP (a partir de 5 amostras) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
 | **UserAgentAnalyzer** | UAs de bots, browsers desatualizados, UA vazio | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Sessão ausente, rotação de UA, sessões excessivas por IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
 | **PatternAnalyzer** | Paths de scan (.env, wp-admin), taxa de erro alta, diversidade de paths | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
@@ -517,7 +517,7 @@ Available signals: `ip_blocked`, `risk_assessed`, `challenge_required`, `email_r
 
 | Analyzer | Detects | Max score | Emitted reasons |
 |---|---|---|---|
-| **RateAnalyzer** | Abnormal request volume per IP | +50 | `critical_rate`, `high_rate`, `medium_rate` |
+| **RateAnalyzer** | Abnormal request volume per IP (from 5 samples on) | +50 | `critical_rate`, `high_rate`, `medium_rate` |
 | **UserAgentAnalyzer** | Bot UAs, outdated browsers, missing UA | +40 | `bot_ua:curl`, `missing_ua`, `outdated_browser` |
 | **SessionAnalyzer** | Missing session, UA rotation, excessive sessions per IP | +35 | `no_session_on_auth_path`, `session_ua_rotation`, `excessive_sessions_per_ip` |
 | **PatternAnalyzer** | Scan paths (.env, wp-admin), high error rate, path diversity | +60 | `scan_attempt:/.env`, `high_error_rate`, `excessive_path_diversity` |
