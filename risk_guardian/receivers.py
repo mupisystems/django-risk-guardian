@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import wraps
 
 from django.contrib.auth.signals import user_logged_in, user_login_failed
 from django.dispatch import receiver
@@ -19,23 +20,51 @@ logger = logging.getLogger("risk_guardian")
 _analyzer = EmailAnalyzer()
 
 
+def _never_raise(func):
+    """Keep the receiver's failures out of the login or signup it listens to.
+
+    These receivers run inside the project's authentication flow: an exception
+    here would fail the user's login or signup. Like a failing analyzer, a
+    failing receiver degrades detection, never the request.
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            func(*args, **kwargs)
+        except Exception:
+            logger.exception(json.dumps({"event": "receiver_error", "receiver": func.__name__}))
+
+    return wrapper
+
+
 def _login_identifier(credentials) -> str:
     credentials = credentials or {}
     return credentials.get("username") or credentials.get("email") or credentials.get("login") or ""
 
 
+def _user_identifier(user) -> str:
+    get_username = getattr(user, "get_username", None)
+    if callable(get_username):
+        return get_username() or ""
+    return getattr(user, "email", None) or ""
+
+
 @receiver(user_logged_in)
+@_never_raise
 def record_successful_login(sender, request, user, **kwargs):
-    record_auth_event(request, LOGIN_OK, user.get_username() if user else "")
+    record_auth_event(request, LOGIN_OK, _user_identifier(user))
 
 
 @receiver(user_login_failed)
+@_never_raise
 def record_failed_login(sender, credentials, request=None, **kwargs):
     record_auth_event(request, LOGIN_FAILED, _login_identifier(credentials))
 
 
+@_never_raise
 def record_signup(sender, request, user, **kwargs):
-    record_auth_event(request, SIGNUP, user.get_username() if user else "")
+    record_auth_event(request, SIGNUP, _user_identifier(user))
 
 
 if user_signed_up is not None:  # pragma: no branch
@@ -43,6 +72,7 @@ if user_signed_up is not None:  # pragma: no branch
 
 
 @receiver(user_logged_in)
+@_never_raise
 def assess_email_on_login(sender, request, user, **kwargs):
     risk = getattr(request, "risk", None)
     if not risk:
@@ -78,6 +108,7 @@ def assess_email_on_login(sender, request, user, **kwargs):
 
 
 @receiver(user_login_failed)
+@_never_raise
 def track_failed_login(sender, credentials, request=None, **kwargs):
     risk = getattr(request, "risk", None) if request else None
     if not risk:
